@@ -36,7 +36,26 @@ absent. It cannot submit work, post to a discussion, or alter your Canvas accoun
 
 ## Status
 
-Under construction. See [PLAN.md](PLAN.md) for the build stages.
+Working. Eleven read-only tools over MCP, fronted by a single-user OAuth 2.1
+server, running in a container. See [DEPLOY.md](DEPLOY.md) to run it and
+[PLAN.md](PLAN.md) for how it was built.
+
+## Tools
+
+| Tool | Returns |
+| --- | --- |
+| `list_courses` | Active courses, term, current score |
+| `list_assignments` | Every assignment, no date filtering, bodies omitted |
+| `get_assignment` | One assignment including its full description |
+| `list_announcements` | Recent announcements across all courses, with text |
+| `list_discussions` / `get_discussion` | Topics, and one topic with replies |
+| `list_files` / `read_course_file` | Course files, and text extracted from one |
+| `list_pages` / `get_page` | Wiki pages, and one page's body |
+| `list_modules` | Modules and their items, in instructor-intended order |
+
+Course tabs are often disabled, and Canvas reports that as an error rather than
+an empty list. Those tools return `{"unavailable": true, "reason": ...}` so a
+sweep across courses is not lost to one locked course.
 
 ## Configuration
 
