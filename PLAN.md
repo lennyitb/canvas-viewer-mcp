@@ -13,7 +13,7 @@ until the current stage is green.
 ## Stage 1 — Canvas client (no MCP yet)
 - [x] `canvas/client.py`: auth, **Link-header pagination**, rate-limit backoff
 - [x] `canvas-probe` CLI for direct verification
-- [x] Checkpoint: `canvas-probe courses` lists 11 real courses against vsc.instructure.com
+- [x] Checkpoint: `canvas-probe courses` lists 11 real courses against a real Canvas account
 
 Pagination is the highest-risk item in the project: miss `rel="next"` and you get
 a partial list with no error — a silent truncation bug in a tool built to stop
@@ -120,7 +120,7 @@ The health check deliberately does not call Canvas. Depending on an external
 service would mark the container unhealthy during a Canvas outage it cannot do
 anything about, and invite an orchestrator to restart it pointlessly.
 
-No `cloudflared` sidecar: canvas-viewer-mcp.lenny.zone is served directly, so
+No `cloudflared` sidecar: the host is served directly, so
 TLS terminates in the existing reverse proxy and the container speaks plain
 HTTP on its port.
 
@@ -133,7 +133,7 @@ Prepared here; the remaining steps need the homelab and the claude.ai account.
 - [x] Published image smoke-tested: healthy, metadata advertises the public
       https URL, anonymous `/mcp` refused with 401
 - [x] [DEPLOY.md](DEPLOY.md) written
-- [ ] DNS: `A canvas-viewer-mcp.lenny.zone -> <public IP>`
+- [ ] DNS: `A <your hostname> -> <public IP>`
 - [ ] `docker compose up -d` on the homelab, with the two secrets in place
 - [ ] Reverse proxy vhost -> `127.0.0.1:8000`, **`proxy_buffering off`**
 - [ ] Add the custom connector on claude.ai, then verify from the phone

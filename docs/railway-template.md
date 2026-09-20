@@ -1,0 +1,108 @@
+# The Railway template
+
+This file is the source of truth for the one-click template the README links
+to. Railway templates are configured in Railway's dashboard rather than from a
+file in the repository, so without this there is no reviewable record of what
+the button actually deploys, and no way to rebuild it if the template is lost.
+
+Railway's own `railway.json` / `railway.toml` config-as-code is **not** used:
+it is deprecated, new services cannot opt into it, and it stops being read on
+2026-12-01. Everything below is dashboard state.
+
+## Why a template at all
+
+The audience is students, not operators. The three things a hosted MCP server
+needs — a hostname, a place to keep its OAuth database, and somewhere to put
+two secrets — are exactly the three things that make a self-hosted install a
+weekend project. A template turns them into a form with two fields, and the
+deploy is into the student's own Railway account: their project, their
+container, their volume, their Canvas token. Nothing routes through the
+maintainer's infrastructure, and there is no shared instance to be a single
+point of failure or a single point of compromise.
+
+## Service
+
+| Setting | Value |
+| --- | --- |
+| Source | Docker image `ghcr.io/lennyitb/canvas-viewer-mcp:latest` |
+| Healthcheck path | `/health` |
+| Volume mount path | `/data` |
+| Restart policy | On failure |
+
+The image rather than a repository build: deploys take seconds instead of
+minutes, and every install runs the exact artifact the release workflow
+published. Building from the repository works too, and is the right choice for
+a fork — point the source at it and leave everything else identical.
+
+The volume is not optional. `/data` holds the OAuth database, and the
+`DB_PATH=/data/auth.sqlite` default is already baked into the image. Without a
+volume, every redeploy wipes the registered client and the student has to
+authorize the connector in Claude again.
+
+`PORT` is injected by Railway and read by the server; do not set it.
+
+## Variables
+
+Three, all required, in this order. The descriptions are what the person
+deploying reads, so they are written for someone who has never seen a terminal.
+
+**`CANVAS_BASE_URL`**
+
+> Your school's Canvas address. Open Canvas in another tab and copy what's in
+> the address bar — anything after the site name is trimmed off
+> automatically. Example: `https://yourschool.instructure.com`
+
+**`CANVAS_TOKEN`**
+
+> Your Canvas access token. In Canvas go to Account → Settings, scroll to
+> Approved Integrations, click "+ New Access Token", leave the expiry blank,
+> and copy the token it shows you — it is shown only once. This grants full
+> access to your Canvas account, so treat it like a password.
+
+**`AUTH_PASSWORD`**
+
+> A password you choose, at least 12 characters. Claude will ask for it once,
+> when you connect. It is the only thing standing between this server's public
+> address and your Canvas account, so don't reuse one.
+
+No `PUBLIC_BASE_URL` variable. The server reads `RAILWAY_PUBLIC_DOMAIN`, which
+Railway sets itself. This is deliberate: it is the one value that cannot be
+known before the first deploy, because Railway assigns the hostname, and it is
+the one that does real damage when copied out of someone else's instructions —
+the OAuth metadata is built from it, so a wrong value sends Claude to
+authorize against whatever host it names.
+
+If you would rather Railway generate the password than have the student pick
+one, set the `AUTH_PASSWORD` default to `${{ secret(24) }}`. The trade is that
+the student then has to open the service's Variables tab to read it, instead
+of knowing it because they typed it.
+
+## After deploying
+
+Railway assigns a domain only when asked. In the service's Settings →
+Networking, choose **Generate Domain**; the connector URL is that domain with
+`/mcp` on the end.
+
+## Publishing
+
+Create it under Workspace Settings → Templates → New Template, fill in the
+above, then copy the template URL from the composer. It looks like
+`https://railway.com/deploy/xxxxxx`. Put that URL in the README button, which
+currently carries `RAILWAY_TEMPLATE_URL` as a placeholder.
+
+## Checking it still works
+
+Deploy the template into a throwaway project and confirm, in order:
+
+1. The deploy succeeds and the healthcheck goes green.
+2. `https://<domain>/.well-known/oauth-authorization-server` lists URLs that
+   all begin with `https://<domain>` — never `http://`, never a local address.
+   This is the check that `RAILWAY_PUBLIC_DOMAIN` was picked up.
+3. An unauthenticated `POST /mcp` returns 401.
+4. Adding `https://<domain>/mcp` in claude.ai reaches the login page, the
+   chosen password works, and `list_courses` returns real courses.
+5. Redeploying does not send you back to the login page — that proves the
+   volume is attached.
+
+A deliberately wrong `CANVAS_BASE_URL` should crash the deploy with the reason
+on the first line of the log, not start and fail every tool call.

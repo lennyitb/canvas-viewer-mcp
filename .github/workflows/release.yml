@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # the skills job attaches release assets
   packages: write
 
 jobs:
@@ -41,3 +41,24 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  skills:
+    name: Attach skill bundles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The zips are what the README tells a claude.ai user to download and
+      # upload. Building them here keeps them in step with skills/ instead of
+      # asking anyone to re-zip a folder by hand.
+      - run: python scripts/build_skill_zips.py
+
+      - name: Upload to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.zip --clobber

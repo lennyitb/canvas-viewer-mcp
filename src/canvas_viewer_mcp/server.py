@@ -580,9 +580,31 @@ def enable_http_auth() -> None:
     register_login_routes(mcp, provider)
 
 
+def _preflight() -> None:
+    """Refuse to start without usable Canvas configuration.
+
+    ``Config.from_env()`` is resolved lazily inside ``get_client()``, so a
+    missing or mistyped CANVAS_BASE_URL used to surface as a server that
+    starts, authorizes, lists every tool, and then fails on every single call.
+    That is the hardest shape of failure to diagnose from the Claude side,
+    because nothing about it points at configuration.
+
+    Checking here turns it into a crashed start with the reason on the first
+    line of the log, which is where somebody who just filled in a deploy form
+    will actually look.
+    """
+    from .config import ConfigError
+
+    try:
+        Config.from_env()
+    except ConfigError as exc:
+        raise SystemExit(f"\ncanvas-viewer-mcp cannot start.\n\n  {exc}\n") from None
+
+
 def main() -> None:
     """Entry point. MCP_TRANSPORT selects stdio (default) or http."""
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()
+    _preflight()
 
     if transport == "stdio":
         mcp.run(transport="stdio")
