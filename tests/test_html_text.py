@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from canvas_viewer_mcp.canvas.html_text import html_to_markdown
+from canvas_viewer_mcp.canvas.html_text import REPLY_KEYWORDS, excerpt_sentences, html_to_markdown
 
 
 def test_empty_and_whitespace_become_none() -> None:
@@ -50,3 +50,25 @@ def test_truncation_is_announced_never_silent() -> None:
 def test_short_text_is_not_truncated() -> None:
     out = html_to_markdown("<p>Read chapter 3.</p>", max_chars=100)
     assert out == "Read chapter 3."
+
+
+def test_excerpt_keeps_only_sentences_naming_a_reply_requirement() -> None:
+    text = (
+        "Post your initial response by Wednesday.\n\n"
+        "Respond to at least two peers by Sunday.\nUse APA citations.\n"
+        "Late work loses 10%."
+    )
+    out = excerpt_sentences(text, REPLY_KEYWORDS)
+    assert out == (
+        "Post your initial response by Wednesday. Respond to at least two peers by Sunday."
+    )
+
+
+def test_excerpt_returns_none_when_nothing_matches() -> None:
+    assert excerpt_sentences("Read chapter 3.", REPLY_KEYWORDS) is None
+    assert excerpt_sentences(None, REPLY_KEYWORDS) is None
+
+
+def test_excerpt_is_capped() -> None:
+    out = excerpt_sentences("reply " * 200, REPLY_KEYWORDS, max_chars=50)
+    assert out is not None and out.endswith("[...]") and len(out) <= 60

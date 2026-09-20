@@ -1,6 +1,6 @@
 """MCP server exposing Canvas coursework.
 
-Two conventions run through every tool here.
+Three conventions run through every tool here.
 
 **Unavailability is data, not failure.** Instructors disable course tabs, and
 Canvas reports a disabled tab as 403 or 404 rather than an empty list. On a
@@ -13,6 +13,14 @@ outstanding, or upcoming. The tools return the fields that make such a
 judgement possible -- notably ``created_at`` alongside ``due_at`` -- and leave
 the judgement to the caller, who can read the assignment text and the
 announcements before deciding.
+
+**Lists are lean; detail is opt-in.** Every payload here lands in a language
+model's context window, where a field costs the same whether or not it is
+read. So list rows omit null fields, list tools omit bodies, and the tools
+that can return a great deal (a whole discussion thread, every announcement
+body) take parameters that default to the smaller answer. ``due_at`` is the
+one null that is always written out, because its absence is the signal this
+project exists to surface and an absent key is too easy to read past.
 """
 
 from __future__ import annotations
@@ -20,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastmcp import FastMCP
 from starlette.requests import Request
@@ -36,9 +44,12 @@ from .canvas.content import (
     fetch_modules,
     fetch_page,
     fetch_pages,
+    fetch_thread,
+    summarise_participation,
 )
 from .canvas.errors import CanvasAuthError, CanvasError, CanvasNotFoundError
 from .canvas.files import fetch_files, read_file
+from .canvas.html_text import REPLY_KEYWORDS, excerpt_sentences, html_to_markdown
 from .config import Config
 
 INSTRUCTIONS = """
@@ -57,9 +68,12 @@ all for the replies to classmates that most rubrics also require, so a
 discussion reads `submitted` or even `graded` while replies are still owed.
 Its `due_at` is usually only the *post* deadline; the reply deadline is later
 and stated in prose in the description. Never treat a `discussion_topic`
-assignment as complete from its submission state -- read the description for
-the reply requirement and call `get_discussion`, which reports how many entries
-the user actually posted and which of them were replies to other people.
+assignment as complete from its submission state. To check every graded
+discussion at once, call `list_discussion_participation`: one call, no post
+bodies, and for each discussion the reply-requirement sentences from its
+description next to a count of what the user actually posted, replies to
+other people counted separately. `get_discussion` does the same for one topic
+and can also return the thread itself when the posts need reading.
 
 These tools report what Canvas holds and classify nothing. When the real
 deadline matters, read the assignment body, the course announcements, and the
@@ -74,10 +88,15 @@ DISCUSSION_CAVEAT = (
     "call `get_discussion` to count the user's own posts and replies."
 )
 
-# Short enough to sit on every row of a sweep without swamping the payload.
-ROW_CAVEAT = (
-    "discussion: `submitted` reflects the main post only; required replies to "
-    "classmates are not tracked by Canvas and may still be outstanding"
+# Sits on every discussion row of a sweep, so it is a pointer, not the text.
+ROW_CAVEAT = "replies untracked by Canvas; see discussion_note"
+
+SWEEP_NOTE = (
+    "`my_participation` counts what the user posted in each thread. "
+    "`reply_requirement` holds the sentences of the description that mention "
+    "replies, responses, peers or classmates, verbatim; compare the counts "
+    "against it, and call `get_assignment` when the excerpt is not enough. "
+    "Ungraded topics are not listed here; use `list_discussions`."
 )
 
 PARTICIPATION_NOTE = (
@@ -90,6 +109,25 @@ PARTICIPATION_NOTE = (
 
 def _is_discussion(row: dict[str, Any]) -> bool:
     return "discussion_topic" in (row.get("submission_types") or [])
+
+
+def _dump(model: Any, *, keep: tuple[str, ...] = (), drop: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Serialise a model for a list row: null fields out, ``keep`` fields in.
+
+    Dropping nulls is the single largest saving available on a sweep -- most
+    optional fields on most rows are null -- and it loses nothing, since a
+    missing key reads the same as a null one. Fields named in ``keep`` are
+    written even when null, for the cases where the null itself is the point.
+    """
+    row: dict[str, Any] = model.model_dump(exclude_none=True, exclude=set(drop))
+    for field in keep:
+        row.setdefault(field, None)
+    return row
+
+
+# How many discussion threads a sweep fetches at once. Canvas's quota is a
+# leaky bucket per token, so this is kept modest rather than maximal.
+SWEEP_CONCURRENCY = 4
 
 
 mcp: FastMCP[Any] = FastMCP(name="canvas-viewer", instructions=INSTRUCTIONS)
@@ -194,14 +232,17 @@ async def list_assignments(course_id: int | None = None) -> dict[str, Any]:
     """List assignments, with no date filtering of any kind.
 
     Every assignment in scope is returned regardless of due date, including
-    those with no due date at all. Bodies are omitted for size; use
-    `get_assignment` for one assignment's full text.
+    those with no due date at all. Rows are compact: bodies and `html_url`
+    are omitted, and null fields other than `due_at` are left out. Use
+    `get_assignment` for one assignment's full text and link.
 
     Compare `due_at` against `created_at` before treating anything as overdue.
 
     Rows whose `submission_types` include `discussion_topic` carry a
-    `completion_caveat`: their submission state covers the main post only and
-    says nothing about required replies. Do not count those as done here.
+    `completion_caveat` and a `discussion_topic_id`: their submission state
+    covers the main post only and says nothing about required replies. Do not
+    count those as done here; `list_discussion_participation` checks them all
+    in one call.
     """
     client = await get_client()
     courses = await _courses()
@@ -218,7 +259,7 @@ async def list_assignments(course_id: int | None = None) -> dict[str, Any]:
             results.append({"course_id": course["id"], **_unavailable(exc)})
             continue
         for assignment in items:
-            row = assignment.model_dump()
+            row = _dump(assignment, keep=("due_at",), drop=("description", "html_url"))
             if _is_discussion(row):
                 row["completion_caveat"] = ROW_CAVEAT
             results.append(row)
@@ -251,7 +292,6 @@ async def get_assignment(course_id: int, assignment_id: int) -> dict[str, Any]:
     row = assignment.model_dump()
     if _is_discussion(row):
         row["completion_caveat"] = DISCUSSION_CAVEAT
-        row["discussion_topic_id"] = (raw.get("discussion_topic") or {}).get("id")
     return row
 
 
@@ -259,18 +299,29 @@ async def get_assignment(course_id: int, assignment_id: int) -> dict[str, Any]:
 
 
 @mcp.tool
-async def list_announcements(days: int = 21) -> dict[str, Any]:
-    """Recent announcements across all active courses, with their full text.
+async def list_announcements(
+    days: int = 21, course_id: int | None = None, include_messages: bool = True
+) -> dict[str, Any]:
+    """Recent announcements, with their full text unless `include_messages` is off.
 
     Announcements are where date changes are usually communicated, so these
     are often the best evidence of what is genuinely due when assignment
-    metadata disagrees.
+    metadata disagrees. Pass `course_id` to read one course, and
+    `include_messages=False` to survey titles and dates alone.
     """
     client = await get_client()
-    course_ids = [c["id"] for c in await _courses()]
+    course_ids = [c["id"] for c in await _courses() if course_id in (None, c["id"])]
+    if course_id is not None and not course_ids:
+        return {"error": f"No active course with id {course_id}."}
     start = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
-    topics = await fetch_announcements(client, course_ids, start_date=start)
-    return {"count": len(topics), "since": start, "announcements": [t.model_dump() for t in topics]}
+    topics = await fetch_announcements(
+        client, course_ids, start_date=start, include_messages=include_messages
+    )
+    return {
+        "count": len(topics),
+        "since": start,
+        "announcements": [_dump(t, drop=("is_announcement",)) for t in topics],
+    }
 
 
 @mcp.tool
@@ -281,25 +332,36 @@ async def list_discussions(course_id: int) -> dict[str, Any]:
         topics = await fetch_discussions(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
-    return {"count": len(topics), "discussions": [t.model_dump() for t in topics]}
+    return {"count": len(topics), "discussions": [_dump(t) for t in topics]}
 
 
 @mcp.tool
-async def get_discussion(course_id: int, topic_id: int) -> dict[str, Any]:
-    """Fetch one discussion topic with every entry in its thread.
+async def get_discussion(
+    course_id: int,
+    topic_id: int,
+    entries: Literal["none", "mine", "all"] = "none",
+    include_messages: bool = True,
+) -> dict[str, Any]:
+    """Fetch one discussion topic and report the user's participation in it.
 
-    Nested replies are included, not just top-level posts -- peer replies are
+    The whole thread is read, nested replies included -- peer replies are
     always nested, so a top-level-only view cannot show whether the user
-    replied to anyone.
+    replied to anyone -- but by default none of it is returned. The answer to
+    "have I done this?" is `my_participation`, which separates top-level posts
+    from replies to other people, together with the topic `message` that
+    states the requirement.
 
-    `my_participation` summarises the user's own entries, separating top-level
-    posts from replies to other people. That is the only way to check a
-    "post once, reply to two classmates" requirement, because Canvas records
-    the submission on the first post and tracks the replies nowhere.
+    `entries` returns the posts themselves: `"mine"` for the user's own,
+    `"all"` for the full thread (which on a large class can run to a hundred
+    posts). `include_messages=False` returns entry metadata without bodies.
+
+    `my_participation` is the only way to check a "post once, reply to two
+    classmates" requirement, because Canvas records the submission on the
+    first post and tracks the replies nowhere.
     """
     client = await get_client()
     try:
-        topic, entries, full_thread = await fetch_discussion(client, course_id, topic_id)
+        topic, thread, full_thread = await fetch_discussion(client, course_id, topic_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
 
@@ -307,8 +369,8 @@ async def get_discussion(course_id: int, topic_id: int) -> dict[str, Any]:
     my_id = me.get("id") if me else None
 
     result: dict[str, Any] = {
-        "topic": topic.model_dump(),
-        "entry_count": len(entries),
+        "topic": _dump(topic),
+        "entry_count": len(thread),
         # Canvas's own subentry total. A gap against `entry_count` means part
         # of the thread did not come back, so participation counts are floors.
         "canvas_subentry_count": topic.reply_count,
@@ -324,29 +386,106 @@ async def get_discussion(course_id: int, topic_id: int) -> dict[str, Any]:
             ),
         }
     else:
-        mine = [e for e in entries if e.user_id == my_id]
         result["my_participation"] = {
             "user_id": my_id,
             "display_name": me.get("name") if me else None,
-            "total_entries": len(mine),
-            "top_level_posts": sum(1 for e in mine if e.depth == 0),
-            "replies_to_others": sum(
-                1 for e in mine if e.depth > 0 and e.parent_user_id not in (None, my_id)
-            ),
-            "replies_to_self": sum(1 for e in mine if e.depth > 0 and e.parent_user_id == my_id),
-            "latest_entry_at": max((e.created_at for e in mine if e.created_at), default=None),
-            "counts_are_complete": full_thread,
+            **summarise_participation(thread, my_id, full_thread=full_thread),
         }
 
     if not full_thread:
         result["warning"] = (
             "Canvas would not serve the full thread, so only top-level entries "
             "were retrieved. Nested replies -- including the user's own -- are "
-            "missing, and the participation counts below are lower bounds."
+            "missing, and the participation counts are lower bounds."
         )
 
-    result["entries"] = [e.model_dump() for e in entries]
+    if entries != "none":
+        selected = thread if entries == "all" else [e for e in thread if e.user_id == my_id]
+        drop = () if include_messages else ("message",)
+        result["entries"] = [_dump(e, drop=drop) for e in selected]
     return result
+
+
+@mcp.tool
+async def list_discussion_participation(course_id: int | None = None) -> dict[str, Any]:
+    """Every graded discussion, with what the user has posted in each. One call.
+
+    This is the tool for "do I still owe any discussion posts or replies?".
+    It sweeps the discussion assignments of every active course (or one), reads
+    each thread in full, and returns one compact row per discussion: the dates,
+    the submission state, the reply-requirement sentences lifted verbatim from
+    the description, and `my_participation` counts. No post bodies, and no
+    full descriptions -- `get_assignment` and `get_discussion` have those.
+
+    Nothing here decides whether a discussion is finished. Read
+    `reply_requirement` against `replies_to_others` for each row.
+    """
+    client = await get_client()
+    courses = await _courses()
+    if course_id is not None:
+        courses = [c for c in courses if c["id"] == course_id]
+        if not courses:
+            return {"error": f"No active course with id {course_id}."}
+
+    me = await _self()
+    my_id = me.get("id") if me else None
+    semaphore = asyncio.Semaphore(SWEEP_CONCURRENCY)
+
+    async def one(course: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+        assignment = flatten_assignment(raw, course_name=course.get("name"))
+        row = _dump(
+            assignment,
+            keep=("due_at", "discussion_topic_id"),
+            drop=(
+                "description",
+                "html_url",
+                "submission_types",
+                "grading_type",
+                "omit_from_final_grade",
+                "assignment_group_id",
+                "position",
+                "availability",
+            ),
+        )
+        row["reply_requirement"] = excerpt_sentences(
+            html_to_markdown(raw.get("description")), REPLY_KEYWORDS
+        )
+        topic_id = assignment.discussion_topic_id
+        if topic_id is None:
+            row["my_participation"] = {
+                "unavailable": True,
+                "reason": "Canvas returned no discussion topic for this assignment.",
+            }
+            return row
+        if my_id is None:
+            row["my_participation"] = {
+                "unavailable": True,
+                "reason": "Could not identify the current Canvas user.",
+            }
+            return row
+        async with semaphore:
+            try:
+                thread, full_thread = await fetch_thread(client, course["id"], topic_id)
+            except CanvasError as exc:
+                row["my_participation"] = _unavailable(exc)
+                return row
+        row["thread_entry_count"] = len(thread)
+        row["my_participation"] = summarise_participation(thread, my_id, full_thread=full_thread)
+        return row
+
+    results: list[dict[str, Any]] = []
+    for course in courses:
+        try:
+            raw_assignments = await client.paginate(
+                f"courses/{course['id']}/assignments", {"include[]": ["submission"]}
+            )
+        except (CanvasAuthError, CanvasNotFoundError) as exc:
+            results.append({"course_id": course["id"], **_unavailable(exc)})
+            continue
+        graded = [a for a in raw_assignments if _is_discussion(a)]
+        results.extend(await asyncio.gather(*(one(course, a) for a in graded)))
+
+    return {"count": len(results), "note": SWEEP_NOTE, "discussions": results}
 
 
 # ---- files, pages, modules ---------------------------------------------------
@@ -360,7 +499,7 @@ async def list_files(course_id: int) -> dict[str, Any]:
         files = await fetch_files(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
-    return {"count": len(files), "files": [f.model_dump() for f in files]}
+    return {"count": len(files), "files": [_dump(f) for f in files]}
 
 
 @mcp.tool
@@ -385,7 +524,7 @@ async def list_pages(course_id: int) -> dict[str, Any]:
         pages = await fetch_pages(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
-    return {"count": len(pages), "pages": [p.model_dump() for p in pages]}
+    return {"count": len(pages), "pages": [_dump(p) for p in pages]}
 
 
 @mcp.tool
@@ -410,7 +549,7 @@ async def list_modules(course_id: int) -> dict[str, Any]:
         modules = await fetch_modules(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
-    return {"count": len(modules), "modules": [m.model_dump() for m in modules]}
+    return {"count": len(modules), "modules": [_dump(m) for m in modules]}
 
 
 @mcp.custom_route("/health", methods=["GET"])

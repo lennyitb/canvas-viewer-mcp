@@ -112,9 +112,11 @@ async def test_assignments_omit_bodies_but_keep_creation_timestamps() -> None:
         result = (await c.call_tool("list_assignments", {})).data
 
     row = result["assignments"][0]
-    assert row["description"] is None, "bodies must stay out of the list payload"
+    assert "description" not in row, "bodies must stay out of the list payload"
     assert row["created_at"] == "2026-08-25T00:00:00Z"
-    assert row["due_at"] is None
+    assert "due_at" in row and row["due_at"] is None, "a null due date is written out"
+    assert "unlock_at" not in row, "other nulls are dropped from list rows"
+    assert "html_url" not in row
 
 
 @respx.mock
@@ -182,6 +184,59 @@ async def test_get_assignment_carries_the_caveat_and_the_topic_id() -> None:
 
 
 @respx.mock
+async def test_list_rows_carry_the_topic_id_for_discussions() -> None:
+    _mock_courses()
+    respx.get(f"{API}/courses/1/assignments").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    **_assignment(10, 1),
+                    "submission_types": ["discussion_topic"],
+                    "discussion_topic": {"id": 946269},
+                }
+            ],
+        )
+    )
+    respx.get(f"{API}/courses/2/assignments").mock(return_value=httpx.Response(200, json=[]))
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_assignments", {})).data
+
+    assert result["assignments"][0]["discussion_topic_id"] == 946269
+
+
+@respx.mock
+async def test_announcement_bodies_can_be_left_out() -> None:
+    _mock_courses()
+    route = respx.get(f"{API}/announcements").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 5,
+                    "title": "Deadline moved",
+                    "posted_at": "2026-09-18T00:00:00Z",
+                    "message": "<p>Essay 1 is now due Friday.</p>",
+                    "context_code": "course_1",
+                }
+            ],
+        )
+    )
+
+    async with Client(server.mcp) as c:
+        full = (await c.call_tool("list_announcements", {})).data
+        lean = (await c.call_tool("list_announcements", {"include_messages": False})).data
+        one = (await c.call_tool("list_announcements", {"course_id": 2})).data
+
+    assert "due Friday" in full["announcements"][0]["message"]
+    assert "message" not in lean["announcements"][0]
+    codes = route.calls.last.request.url.params.get_list("context_codes[]")
+    assert codes == ["course_2"], "course_id narrows the sweep to that course"
+    assert one["count"] == 1
+
+
+@respx.mock
 async def test_course_list_is_cached_across_tool_calls() -> None:
     route = respx.get(f"{API}/courses").mock(return_value=httpx.Response(200, json=COURSES))
 
@@ -203,6 +258,7 @@ async def test_every_tool_is_registered() -> None:
         "list_announcements",
         "list_discussions",
         "get_discussion",
+        "list_discussion_participation",
         "list_files",
         "read_course_file",
         "list_pages",

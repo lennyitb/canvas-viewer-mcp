@@ -232,12 +232,12 @@ def _walk_view(
     return out
 
 
-async def fetch_discussion(
+async def fetch_thread(
     client: CanvasClient, course_id: int, topic_id: int
-) -> tuple[DiscussionTopic, list[DiscussionReply], bool]:
-    """Fetch one topic with every entry in its thread, nested replies included.
+) -> tuple[list[DiscussionReply], bool]:
+    """Fetch every entry in a topic's thread, nested replies included.
 
-    Returns ``(topic, entries, full_tree)``. ``full_tree`` is False when Canvas
+    Returns ``(entries, full_tree)``. ``full_tree`` is False when Canvas
     could not serve the materialized view and only top-level entries were
     recoverable -- a caller asking "did I reply to anyone?" cannot answer it
     from a partial thread, and needs to be told which it got.
@@ -245,19 +245,17 @@ async def fetch_discussion(
     Canvas builds the ``/view`` payload asynchronously and answers 503 while
     that job runs, so the top-level endpoint remains as a fallback.
     """
-    topic_raw = await client.get(f"courses/{course_id}/discussion_topics/{topic_id}")
-    topic = flatten_topic(topic_raw, include_message=True)
     base = f"courses/{course_id}/discussion_topics/{topic_id}"
 
     try:
         view = await client.get(f"{base}/view")
     except CanvasError:
         entries = await client.paginate(f"{base}/entries")
-        return topic, [flatten_reply(e) for e in entries], False
+        return [flatten_reply(e) for e in entries], False
 
     if not isinstance(view, dict) or "view" not in view:
         entries = await client.paginate(f"{base}/entries")
-        return topic, [flatten_reply(e) for e in entries], False
+        return [flatten_reply(e) for e in entries], False
 
     participants = {
         p["id"]: p.get("display_name") or p.get("short_name")
@@ -283,7 +281,43 @@ async def fetch_discussion(
         replies.append(entry)
         by_id[entry_id] = entry
 
-    return topic, replies, True
+    return replies, True
+
+
+async def fetch_discussion(
+    client: CanvasClient, course_id: int, topic_id: int
+) -> tuple[DiscussionTopic, list[DiscussionReply], bool]:
+    """Fetch one topic, with its message, and every entry in its thread.
+
+    See :func:`fetch_thread` for the ``full_tree`` flag.
+    """
+    topic_raw = await client.get(f"courses/{course_id}/discussion_topics/{topic_id}")
+    topic = flatten_topic(topic_raw, include_message=True)
+    entries, full_tree = await fetch_thread(client, course_id, topic_id)
+    return topic, entries, full_tree
+
+
+def summarise_participation(
+    entries: list[DiscussionReply], my_id: int, *, full_thread: bool
+) -> JsonObject:
+    """Count the user's own entries in a thread, replies to others kept apart.
+
+    A "reply to two classmates" requirement is not met by replying to one's
+    own post, so the two are counted separately. These are counts of what
+    was posted, nothing more; whether they satisfy the requirement is for the
+    caller to decide against the topic's text.
+    """
+    mine = [e for e in entries if e.user_id == my_id]
+    return {
+        "total_entries": len(mine),
+        "top_level_posts": sum(1 for e in mine if e.depth == 0),
+        "replies_to_others": sum(
+            1 for e in mine if e.depth > 0 and e.parent_user_id not in (None, my_id)
+        ),
+        "replies_to_self": sum(1 for e in mine if e.depth > 0 and e.parent_user_id == my_id),
+        "latest_entry_at": max((e.created_at for e in mine if e.created_at), default=None),
+        "counts_are_complete": full_thread,
+    }
 
 
 async def fetch_announcements(

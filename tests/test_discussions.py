@@ -112,7 +112,9 @@ async def test_nested_replies_are_returned_not_just_top_level_posts() -> None:
     _mock_thread()
 
     async with Client(server.mcp) as c:
-        result = (await c.call_tool("get_discussion", {"course_id": 1, "topic_id": 9})).data
+        result = (
+            await c.call_tool("get_discussion", {"course_id": 1, "topic_id": 9, "entries": "all"})
+        ).data
 
     assert result["entry_count"] == 5
     assert result["full_thread"] is True
@@ -144,7 +146,9 @@ async def test_entries_carry_the_author_of_the_post_they_reply_to() -> None:
     _mock_thread()
 
     async with Client(server.mcp) as c:
-        result = (await c.call_tool("get_discussion", {"course_id": 1, "topic_id": 9})).data
+        result = (
+            await c.call_tool("get_discussion", {"course_id": 1, "topic_id": 9, "entries": "all"})
+        ).data
 
     by_id = {e["id"]: e for e in result["entries"]}
     assert by_id[4]["parent_user_id"] == 600
@@ -199,7 +203,171 @@ async def test_recent_posts_missing_from_the_view_are_merged_in() -> None:
     _mock_thread(view)
 
     async with Client(server.mcp) as c:
-        result = (await c.call_tool("get_discussion", {"course_id": 1, "topic_id": 9})).data
+        result = (
+            await c.call_tool("get_discussion", {"course_id": 1, "topic_id": 9, "entries": "all"})
+        ).data
 
     assert 6 in {e["id"] for e in result["entries"]}
     assert result["my_participation"]["replies_to_others"] == 2
+
+
+# ---- lean by default ---------------------------------------------------------
+
+
+@respx.mock
+async def test_thread_bodies_are_not_returned_unless_asked_for() -> None:
+    """The common question is "have I done this?", answered by the counts and
+    the topic text. Seventy-seven post bodies on top of that is the single
+    largest token cost in the whole tool set, so they are opt-in."""
+    _mock_thread()
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("get_discussion", {"course_id": 1, "topic_id": 9})).data
+
+    assert "entries" not in result
+    assert result["entry_count"] == 5, "the thread is still read in full for the counts"
+    assert result["my_participation"]["replies_to_others"] == 1
+    assert "two classmates" in result["topic"]["message"], "the requirement text stays"
+
+
+@respx.mock
+async def test_entries_mine_returns_only_the_users_own_posts() -> None:
+    _mock_thread()
+
+    async with Client(server.mcp) as c:
+        result = (
+            await c.call_tool("get_discussion", {"course_id": 1, "topic_id": 9, "entries": "mine"})
+        ).data
+
+    assert [e["id"] for e in result["entries"]] == [1, 2, 4]
+    assert all(e["user_id"] == 500 for e in result["entries"])
+
+
+@respx.mock
+async def test_entries_can_be_returned_without_their_bodies() -> None:
+    _mock_thread()
+
+    async with Client(server.mcp) as c:
+        result = (
+            await c.call_tool(
+                "get_discussion",
+                {"course_id": 1, "topic_id": 9, "entries": "all", "include_messages": False},
+            )
+        ).data
+
+    assert len(result["entries"]) == 5
+    assert all("message" not in e for e in result["entries"])
+    assert all("deleted" in e and "depth" in e for e in result["entries"])
+
+
+# ---- the one-call sweep ------------------------------------------------------
+
+ASSIGNMENTS = [
+    {
+        "id": 77,
+        "course_id": 1,
+        "name": "Week 4 Discussion",
+        "due_at": "2026-09-17T03:59:59Z",
+        "created_at": "2026-08-25T00:00:00Z",
+        "points_possible": 10.0,
+        "submission_types": ["discussion_topic"],
+        "description": (
+            "<p>Post a question about the reading by Wednesday.</p>"
+            "<p>Then reply to two classmates by Sunday. Replies should be substantive.</p>"
+            "<p>Cite the textbook.</p>"
+        ),
+        "discussion_topic": {"id": 9},
+        "submission": {"workflow_state": "submitted", "submitted_at": "2026-09-16T03:31:37Z"},
+    },
+    {
+        "id": 78,
+        "course_id": 1,
+        "name": "Essay 1",
+        "due_at": None,
+        "created_at": "2026-08-25T00:00:00Z",
+        "submission_types": ["online_upload"],
+        "description": "<p>Respond to the prompt in 500 words.</p>",
+    },
+]
+
+
+@respx.mock
+async def test_participation_sweep_reports_every_graded_discussion_in_one_call() -> None:
+    """ "Do I still owe any discussion posts?" used to take a sweep of
+    `list_assignments`, then `get_assignment` and `get_discussion` per
+    discussion, each with a full thread. This is the same answer in one call
+    with no bodies at all."""
+    respx.get(f"{API}/courses").mock(return_value=httpx.Response(200, json=COURSES))
+    respx.get(f"{API}/courses/1/assignments").mock(
+        return_value=httpx.Response(200, json=ASSIGNMENTS)
+    )
+    _mock_thread()
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_discussion_participation", {})).data
+
+    assert result["count"] == 1, "non-discussion assignments are not rows"
+    row = result["discussions"][0]
+    assert row["id"] == 77
+    assert row["discussion_topic_id"] == 9
+    assert row["course_name"] == "History"
+    assert row["submission"]["workflow_state"] == "submitted"
+    assert row["my_participation"]["top_level_posts"] == 1
+    assert row["my_participation"]["replies_to_others"] == 1
+    assert row["my_participation"]["counts_are_complete"] is True
+    assert row["thread_entry_count"] == 5
+    assert "description" not in row
+    assert "html_url" not in row
+    assert "message" not in row
+
+
+@respx.mock
+async def test_participation_sweep_lifts_only_the_reply_sentences() -> None:
+    """The description is the only place the reply requirement is written
+    down, and it is far too long to carry on every row. The sentences that
+    mention replies are lifted out verbatim; the rest is not."""
+    respx.get(f"{API}/courses").mock(return_value=httpx.Response(200, json=COURSES))
+    respx.get(f"{API}/courses/1/assignments").mock(
+        return_value=httpx.Response(200, json=ASSIGNMENTS)
+    )
+    _mock_thread()
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_discussion_participation", {})).data
+
+    excerpt = result["discussions"][0]["reply_requirement"]
+    assert "reply to two classmates by Sunday" in excerpt
+    assert "Replies should be substantive" in excerpt
+    assert "Cite the textbook" not in excerpt
+    assert "Post a question" not in excerpt
+
+
+@respx.mock
+async def test_participation_sweep_survives_one_unreadable_thread() -> None:
+    respx.get(f"{API}/courses").mock(return_value=httpx.Response(200, json=COURSES))
+    respx.get(f"{API}/users/self").mock(return_value=httpx.Response(200, json=ME))
+    respx.get(f"{API}/courses/1/assignments").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                ASSIGNMENTS[0],
+                {**ASSIGNMENTS[0], "id": 79, "name": "Week 5", "discussion_topic": {"id": 10}},
+            ],
+        )
+    )
+    respx.get(f"{API}/courses/1/discussion_topics/9/view").mock(
+        return_value=httpx.Response(200, json=VIEW)
+    )
+    respx.get(f"{API}/courses/1/discussion_topics/10/view").mock(
+        return_value=httpx.Response(404, text="not found")
+    )
+    respx.get(f"{API}/courses/1/discussion_topics/10/entries").mock(
+        return_value=httpx.Response(404, text="not found")
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_discussion_participation", {})).data
+
+    by_id = {r["id"]: r for r in result["discussions"]}
+    assert by_id[77]["my_participation"]["replies_to_others"] == 1
+    assert by_id[79]["my_participation"]["unavailable"] is True
