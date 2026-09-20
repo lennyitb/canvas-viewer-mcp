@@ -32,9 +32,11 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("CANVAS_TOKEN", "test-token")
     server._client = None
     server._courses_cache = None
+    server._self_cache = None
     yield
     server._client = None
     server._courses_cache = None
+    server._self_cache = None
 
 
 def _mock_courses() -> None:
@@ -113,6 +115,70 @@ async def test_assignments_omit_bodies_but_keep_creation_timestamps() -> None:
     assert row["description"] is None, "bodies must stay out of the list payload"
     assert row["created_at"] == "2026-08-25T00:00:00Z"
     assert row["due_at"] is None
+
+
+@respx.mock
+async def test_discussion_rows_are_flagged_and_other_rows_are_not() -> None:
+    """A graded discussion reads `submitted` once the main post is up, with no
+    field anywhere for the replies still owed. The row has to say so, or a
+    sweep counts it done."""
+    _mock_courses()
+    discussion = {**_assignment(10, 1), "submission_types": ["discussion_topic"]}
+    quiz = {**_assignment(11, 1), "submission_types": ["online_quiz"]}
+    respx.get(f"{API}/courses/1/assignments").mock(
+        return_value=httpx.Response(200, json=[discussion, quiz])
+    )
+    respx.get(f"{API}/courses/2/assignments").mock(return_value=httpx.Response(200, json=[]))
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_assignments", {})).data
+
+    rows = {r["id"]: r for r in result["assignments"] if r.get("id")}
+    assert "completion_caveat" in rows[10]
+    assert "completion_caveat" not in rows[11]
+    assert result["discussion_count"] == 1
+    assert "replies" in result["discussion_note"]
+
+
+@respx.mock
+async def test_no_discussion_note_when_there_are_no_discussions() -> None:
+    _mock_courses()
+    respx.get(f"{API}/courses/1/assignments").mock(
+        return_value=httpx.Response(
+            200, json=[{**_assignment(11, 1), "submission_types": ["online_quiz"]}]
+        )
+    )
+    respx.get(f"{API}/courses/2/assignments").mock(return_value=httpx.Response(200, json=[]))
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_assignments", {})).data
+
+    assert "discussion_note" not in result
+
+
+@respx.mock
+async def test_get_assignment_carries_the_caveat_and_the_topic_id() -> None:
+    """The caveat is useless without a way to act on it, so the row hands over
+    the topic id `get_discussion` needs."""
+    _mock_courses()
+    respx.get(f"{API}/courses/1/assignments/10").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **_assignment(10, 1),
+                "submission_types": ["discussion_topic"],
+                "description": "<p>Reply to two classmates by Sunday.</p>",
+                "discussion_topic": {"id": 946269},
+            },
+        )
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("get_assignment", {"course_id": 1, "assignment_id": 10})).data
+
+    assert "completion_caveat" in result
+    assert result["discussion_topic_id"] == 946269
+    assert "two classmates" in result["description"]
 
 
 @respx.mock
