@@ -86,6 +86,29 @@ async def _assignments(client: CanvasClient, course_id: int | None) -> int:
     return 0
 
 
+def _hash_password() -> int:
+    """Print an argon2 hash for AUTH_PASSWORD_HASH.
+
+    Reads from a prompt rather than argv so the password does not end up in
+    shell history or the process list.
+    """
+    import getpass
+
+    from .auth.provider import hash_password
+
+    first = getpass.getpass("Connector password: ")
+    if len(first) < 12:
+        print("Use at least 12 characters.", file=sys.stderr)
+        return 2
+    if first != getpass.getpass("Confirm: "):
+        print("Passwords did not match.", file=sys.stderr)
+        return 2
+
+    print("\nAdd this to your environment (the hash, never the password):\n")
+    print(f"AUTH_PASSWORD_HASH='{hash_password(first)}'")
+    return 0
+
+
 Handler = Callable[[CanvasClient, int | None], Awaitable[int]]
 
 COMMANDS: dict[str, Handler] = {
@@ -106,11 +129,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="canvas-probe",
         description="Verify Canvas API access without going through MCP.",
     )
-    parser.add_argument("command", choices=sorted(COMMANDS), help="what to fetch")
+    parser.add_argument(
+        "command",
+        choices=sorted([*COMMANDS, "hash-password"]),
+        help="what to fetch, or hash-password to generate AUTH_PASSWORD_HASH",
+    )
     parser.add_argument(
         "--course", type=int, default=None, help="limit to one course id (assignments only)"
     )
     args = parser.parse_args(argv)
+
+    if args.command == "hash-password":
+        return _hash_password()
 
     try:
         return asyncio.run(_run(args.command, args.course))

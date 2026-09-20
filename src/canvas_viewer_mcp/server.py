@@ -18,6 +18,7 @@ announcements before deciding.
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -286,8 +287,39 @@ async def list_modules(course_id: int) -> dict[str, Any]:
     return {"count": len(modules), "modules": [m.model_dump() for m in modules]}
 
 
+def enable_http_auth() -> None:
+    """Put the OAuth server in front of the MCP endpoint.
+
+    Only applied for HTTP. Over stdio the transport is a pipe to a local
+    process that already runs as the user, so there is no one to authenticate
+    and demanding a browser login would make local testing impossible.
+    """
+    from .auth.login import register_login_routes
+    from .auth.provider import SingleUserOAuthProvider
+    from .config import AuthConfig
+
+    provider = SingleUserOAuthProvider(AuthConfig.from_env())
+    mcp.auth = provider
+    register_login_routes(mcp, provider)
+
+
 def main() -> None:
-    mcp.run(transport="stdio")
+    """Entry point. MCP_TRANSPORT selects stdio (default) or http."""
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower()
+
+    if transport == "stdio":
+        mcp.run(transport="stdio")
+        return
+
+    if transport not in ("http", "streamable-http"):
+        raise SystemExit(f"Unsupported MCP_TRANSPORT {transport!r}; use 'stdio' or 'http'.")
+
+    enable_http_auth()
+    mcp.run(
+        transport="http",
+        host=os.environ.get("HOST", "0.0.0.0"),
+        port=int(os.environ.get("PORT", "8000")),
+    )
 
 
 if __name__ == "__main__":

@@ -45,6 +45,25 @@ def _read_base_url() -> str:
     return host.rstrip("/")
 
 
+def _read_public_base_url() -> str:
+    """The URL Anthropic reaches this server on.
+
+    Taken from configuration and never inferred from the inbound request.
+    Behind a reverse proxy the request scheme is http, so deriving OAuth
+    metadata URLs from it would advertise http:// endpoints and the connector
+    would be rejected. This sidesteps the whole X-Forwarded-Proto question.
+    """
+    url = os.environ.get("PUBLIC_BASE_URL", "").strip()
+    if not url:
+        raise ConfigError(
+            "PUBLIC_BASE_URL is not set (e.g. https://canvas-viewer-mcp.example.com). "
+            "It must be the public HTTPS URL, not the local bind address."
+        )
+    if not url.startswith("https://") and "localhost" not in url and "127.0.0.1" not in url:
+        raise ConfigError(f"PUBLIC_BASE_URL must be https:// for a public deployment, got {url!r}.")
+    return url.rstrip("/")
+
+
 @dataclass(frozen=True)
 class Config:
     base_url: str
@@ -60,3 +79,37 @@ class Config:
     def __repr__(self) -> str:
         # Never let the token reach a log line or traceback.
         return f"Config(base_url={self.base_url!r}, token=<redacted>)"
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    """Configuration for the OAuth server that fronts the MCP endpoint."""
+
+    public_base_url: str
+    password_hash: str
+    db_path: Path
+
+    @classmethod
+    def from_env(cls) -> AuthConfig:
+        password_hash = os.environ.get("AUTH_PASSWORD_HASH", "").strip()
+        if not password_hash:
+            raise ConfigError(
+                "AUTH_PASSWORD_HASH is not set. Generate one with "
+                "`canvas-probe hash-password` and store the hash, not the password."
+            )
+        if not password_hash.startswith("$argon2"):
+            raise ConfigError("AUTH_PASSWORD_HASH does not look like an argon2 hash.")
+
+        db = os.environ.get("AUTH_DB_PATH", "").strip()
+        return cls(
+            public_base_url=_read_public_base_url(),
+            password_hash=password_hash,
+            db_path=Path(db)
+            if db
+            else Path.home() / ".local" / "share" / "canvas-viewer-mcp" / "auth.sqlite",
+        )
+
+    def __repr__(self) -> str:
+        # The password hash is not a password, but it is still an offline
+        # cracking target; keep it out of logs.
+        return f"AuthConfig(public_base_url={self.public_base_url!r}, password_hash=<redacted>)"

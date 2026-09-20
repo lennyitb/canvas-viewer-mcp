@@ -84,20 +84,38 @@ Testing over stdio first means the whole tool surface is debugged before any
 OAuth, networking, or deployment exists.
 
 ## Stage 4 — HTTP transport + OAuth 2.1
-- [ ] Verify current MCP auth spec before building (this surface has been moving)
-- [ ] `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`
-- [ ] Dynamic Client Registration (required for Claude mobile), PKCE S256
-- [ ] Single-user login, argon2 password hash from env, tokens in SQLite
-- [ ] Checkpoint: full OAuth dance completes against a local client
+- [x] Built on FastMCP's `OAuthProvider`, which supplies DCR, PKCE, metadata
+      documents and token endpoints; this project supplies storage and the login gate
+- [x] `/.well-known/oauth-authorization-server` and
+      `/.well-known/oauth-protected-resource/mcp` (RFC 9728 puts the latter under
+      the resource path)
+- [x] Dynamic Client Registration (required for Claude mobile), PKCE S256
+- [x] Single-user login, argon2 hash from env, tokens in SQLite so a redeploy
+      does not silently deauthorize the connector
+- [x] Checkpoint: the full dance runs end to end in tests -- discover, register,
+      authorize, log in, exchange with PKCE, call `/mcp` with the bearer token
+
+`authorize()` issues no code. The endpoint is reachable by anyone, so it parks
+the request and redirects to a password-gated page; only a correct password
+turns a parked request into a code. Codes and refresh tokens are single-use,
+and rotation kills both halves of a pair.
+
+`PUBLIC_BASE_URL` is configuration, never inferred from the request. Behind a
+reverse proxy the inbound scheme is http, so derived metadata would advertise
+http:// endpoints and the connector would be rejected.
 
 ## Stage 5 — Containerize
 - [ ] Multi-stage Dockerfile, non-root, no secrets baked into the image
-- [ ] `compose.yaml`: app + `cloudflared` sidecar
+- [ ] `compose.yaml`: app only, bound to a local port
 - [ ] GitHub Actions → GHCR on tag
+
+No `cloudflared` sidecar: canvas-viewer-mcp.lenny.zone is served directly, so
+TLS terminates in the existing reverse proxy and the container speaks plain
+HTTP on its port.
 
 ## Stage 6 — Deploy and connect
 - [ ] Pull image on target host, bring up tunnel
-- [ ] DNS: `CNAME canvas-viewer-mcp.lenny.zone -> <TUNNEL-ID>.cfargotunnel.com` (proxied)
+- [ ] DNS: `A canvas-viewer-mcp.lenny.zone -> <public IP>`
 - [ ] Add custom connector on claude.ai, verify from phone
 
 ## Running concern — response size
