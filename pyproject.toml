@@ -27,6 +27,7 @@ dev = [
 
 [project.scripts]
 canvas-probe = "canvas_viewer_mcp.cli:main"
+canvas-viewer-mcp = "canvas_viewer_mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]

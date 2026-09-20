@@ -43,11 +43,42 @@ shells (orientation, placement, support), and distinguishing them is a
 query-time judgement, not something the server should decide.
 
 ## Stage 3 — MCP server over stdio
-- [ ] Tools: `coursework_status`, `list_courses`, `assignment`, `course_files`,
-      `read_file`, `discussions`, `discussion`, `announcements`, `pages`, `page`
-- [ ] HTML → Markdown with boilerplate stripped; hard size caps with explicit truncation markers
-- [ ] Checkpoint: driven live from Claude Code against real Canvas data, and it
-      surfaces something the Canvas dashboard hides
+- [x] 11 tools: `list_courses`, `list_assignments`, `get_assignment`,
+      `list_announcements`, `list_discussions`, `get_discussion`, `list_files`,
+      `read_course_file`, `list_pages`, `get_page`, `list_modules`
+- [x] HTML → Markdown with boilerplate stripped; hard size caps with explicit truncation markers
+- [x] Graceful degradation: a disabled course tab returns a note, not an exception
+- [x] Checkpoint: driven live over MCP against real Canvas, and it surfaced
+      what the dashboard hides (see below)
+
+Availability is not uniform and the tools must survive it: across eleven real
+courses, files 403 in five and pages 404 in seven. A sweep continues past them.
+
+### What the checkpoint found
+
+Introduction to Projects, module order vs. due dates:
+
+| # | Assignment | due_at | state |
+| --- | --- | --- | --- |
+| 1 | Simulation/Breadboard | 2026-09-07 | submitted |
+| 2 | Schematic Capture | 2026-09-21 | submitted |
+| 3 | PCB Layout and Procurement #1 | 2025-09-18 | submitted |
+| 4 | PCB Layout and Procurement #2 | 2025-09-25 | **missing** |
+| 5 | BOM | 2025-10-01 | missing |
+| 6 | PCB Assembly and Board Bench Test | 2025-11-13 | missing |
+| 7 | Enclosure Design and Fabrication | 2025-11-20 | missing |
+| 8 | PCB and Enclosure Assembly | 2025-12-04 | missing |
+| 9 | Test & Demonstration | 2025-12-11 | missing |
+
+The module ordering matches the stale date ordering exactly, offset by about a
+year. Every assignment was created 2026-08-25; the first two had their dates
+rolled forward and the rest did not. Adding a year to item 4 gives 2026-09-25,
+which sits four days after item 3's corrected date -- consistent with the rest
+of the sequence.
+
+No code produced that reading. The tools supplied `due_at`, `created_at`,
+module position, and submission state; the inference was made at query time.
+That is the whole argument for keeping classification out of the server.
 
 Testing over stdio first means the whole tool surface is debugged before any
 OAuth, networking, or deployment exists.
