@@ -36,7 +36,7 @@ absent. It cannot submit work, post to a discussion, or alter your Canvas accoun
 
 ## Status
 
-Working. Eleven read-only tools over MCP, fronted by a single-user OAuth 2.1
+Working. Twelve read-only tools over MCP, fronted by a single-user OAuth 2.1
 server, running in a container. See [DEPLOY.md](DEPLOY.md) to run it and
 [PLAN.md](PLAN.md) for how it was built.
 
@@ -47,8 +47,9 @@ server, running in a container. See [DEPLOY.md](DEPLOY.md) to run it and
 | `list_courses` | Active courses, term, current score |
 | `list_assignments` | Every assignment, no date filtering, bodies omitted |
 | `get_assignment` | One assignment including its full description |
-| `list_announcements` | Recent announcements across all courses, with text |
-| `list_discussions` / `get_discussion` | Topics, and one topic's full reply tree with the user's own participation counted |
+| `list_announcements` | Recent announcements across all courses, with text (or titles only) |
+| `list_discussions` / `get_discussion` | Topics, and one topic with the user's own participation counted; the reply tree on request |
+| `list_discussion_participation` | Every graded discussion with the reply requirement and the user's post counts, in one call |
 | `list_files` / `read_course_file` | Course files, and text extracted from one |
 | `list_pages` / `get_page` | Wiki pages, and one page's body |
 | `list_modules` | Modules and their items, in instructor-intended order |
@@ -68,17 +69,38 @@ of 23 assignments.
 
 Nothing here classifies that for you, but the tools stop hiding it:
 
-- `list_assignments` puts a `completion_caveat` on every `discussion_topic` row.
-- `get_assignment` repeats it in full and hands back `discussion_topic_id`.
-- `get_discussion` returns the **whole thread**, nested replies included, and
-  summarises `my_participation` — top-level posts, replies to other people, and
-  replies to yourself, counted separately.
+- `list_discussion_participation` answers "do I still owe any discussion
+  posts?" in one call: a row per graded discussion with its dates, submission
+  state, the sentences of its description that mention replies, and
+  `my_participation` — top-level posts, replies to other people, and replies
+  to yourself, counted separately. No post bodies.
+- `list_assignments` puts a `completion_caveat` and a `discussion_topic_id` on
+  every `discussion_topic` row.
+- `get_assignment` repeats the caveat in full.
+- `get_discussion` reads the **whole thread**, nested replies included, and
+  returns `my_participation` plus the topic text. Pass `entries="mine"` or
+  `entries="all"` to get the posts themselves, and `include_messages=False` to
+  get them without bodies.
 
 That last one matters more than it sounds. Canvas serves only top-level entries
 from `/entries`, and peer replies are always nested: on one Week 4 topic that
 endpoint returned 22 of 77 entries, hiding every reply anyone had written. The
 server reads the full thread view instead, and says `full_thread: false` when
 Canvas could only give it the top level.
+
+## Token budget
+
+Everything these tools return lands in a model's context window, so lists are
+lean and detail is opt-in:
+
+- List rows omit null fields, except `due_at`, whose absence is the point.
+- `list_assignments` omits bodies and `html_url`; `get_assignment` has both.
+- `get_discussion` returns counts and the topic text by default, not the
+  thread. On one real Week 4 topic that is under 1k characters instead of 36k.
+- `list_announcements` takes `include_messages=False` and a `course_id`.
+- `list_discussion_participation` replaces a `list_assignments` sweep followed
+  by `get_assignment` and `get_discussion` per discussion. On a course with 20
+  graded discussions that is roughly 14k characters in place of 765k.
 
 ## Configuration
 

@@ -66,6 +66,8 @@ class Assignment(BaseModel):
     assignment_group_id: int | None = None
     position: int | None = None
     html_url: str | None = None
+    # Set only for graded discussions; it is what `get_discussion` takes.
+    discussion_topic_id: int | None = None
 
     description: str | None = None
     submission: Submission | None = None
@@ -95,6 +97,7 @@ def flatten_assignment(
 ) -> Assignment:
     """Project one raw Canvas assignment onto the Assignment model."""
     availability = raw.get("availability_status") or {}
+    topic = raw.get("discussion_topic")
 
     return Assignment(
         id=raw["id"],
@@ -115,6 +118,7 @@ def flatten_assignment(
         assignment_group_id=raw.get("assignment_group_id"),
         position=raw.get("position"),
         html_url=raw.get("html_url"),
+        discussion_topic_id=topic.get("id") if isinstance(topic, dict) else None,
         description=html_to_markdown(raw.get("description")) if include_description else None,
         submission=flatten_submission(raw.get("submission")),
     )
