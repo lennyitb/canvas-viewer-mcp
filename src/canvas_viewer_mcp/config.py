@@ -22,13 +22,12 @@ def _read_token() -> str:
     if token := os.environ.get("CANVAS_TOKEN"):
         return token.strip()
 
-    path = Path(os.environ["CANVAS_TOKEN_FILE"]) if "CANVAS_TOKEN_FILE" in os.environ else DEFAULT_TOKEN_FILE
+    override = os.environ.get("CANVAS_TOKEN_FILE")
+    path = Path(override) if override else DEFAULT_TOKEN_FILE
     try:
         token = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
-        raise ConfigError(
-            f"No Canvas token. Set CANVAS_TOKEN, or place one at {path}."
-        ) from None
+        raise ConfigError(f"No Canvas token. Set CANVAS_TOKEN, or place one at {path}.") from None
     except PermissionError:
         raise ConfigError(f"Cannot read token file at {path}: permission denied.") from None
 
@@ -40,9 +39,7 @@ def _read_token() -> str:
 def _read_base_url() -> str:
     host = os.environ.get("CANVAS_BASE_URL", "").strip()
     if not host:
-        raise ConfigError(
-            "CANVAS_BASE_URL is not set (e.g. https://yourschool.instructure.com)."
-        )
+        raise ConfigError("CANVAS_BASE_URL is not set (e.g. https://yourschool.instructure.com).")
     if not host.startswith(("http://", "https://")):
         host = f"https://{host}"
     return host.rstrip("/")

@@ -7,8 +7,8 @@ until the current stage is green.
 - [x] `.gitignore` written *before* `git init` (public repo; token must never be stageable)
 - [x] Canvas token relocated to `~/.config/canvas-viewer-mcp/token` (0600), outside the repo tree
 - [x] Project scaffold, `pyproject.toml`, `README`, `LICENSE`, `.env.example`
-- [ ] gitleaks: pre-commit hook + CI job (two independent chances to catch a leak)
-- [ ] Push to GitHub
+- [x] gitleaks: pre-commit hook + CI job (two independent chances to catch a leak)
+- [x] Push to GitHub
 
 ## Stage 1 — Canvas client (no MCP yet)
 - [ ] `canvas/client.py`: auth, **Link-header pagination**, rate-limit backoff
