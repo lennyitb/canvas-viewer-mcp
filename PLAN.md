@@ -30,12 +30,13 @@ what counts as outstanding -- and policy frozen into a server is wrong in ways
 you cannot see from the outside. Deciding it per question, with the assignment
 text and announcements in hand, is both more accurate and less code.
 
-- [ ] Fetch all assignments per course, no date filter, `include[]=submission`
-- [ ] Flatten to a stable row: dates, submission state, points, module, term,
-      publication state, `updated_at`, permalink
-- [ ] Preserve nulls faithfully -- `due_at: null` is the signal, not an absence
-- [ ] Tests: nothing dropped, nulls survive, submission state survives
-- [ ] Checkpoint: `canvas-probe assignments <course>` dumps every assignment
+- [x] Fetch all assignments per course, no date filter, `include[]=submission`
+- [x] Flatten to a stable row: dates, submission state, points,
+      publication state, `created_at`/`updated_at`, permalink
+- [x] Preserve nulls faithfully -- `due_at: null` is the signal, not an absence
+- [x] Tests: nothing dropped, nulls survive, submission state survives (27 passing)
+- [x] Checkpoint: `canvas-probe assignments --course 68818` dumps all 9, exposing
+      7 due dates left a year stale against a 2026-08-25 creation date
 
 Term metadata stays in the output. The active-course list includes non-course
 shells (orientation, placement, support), and distinguishing them is a
