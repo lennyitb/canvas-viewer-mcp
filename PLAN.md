@@ -105,9 +105,20 @@ reverse proxy the inbound scheme is http, so derived metadata would advertise
 http:// endpoints and the connector would be rejected.
 
 ## Stage 5 — Containerize
-- [ ] Multi-stage Dockerfile, non-root, no secrets baked into the image
-- [ ] `compose.yaml`: app only, bound to a local port
-- [ ] GitHub Actions → GHCR on tag
+- [x] Multi-stage Dockerfile, non-root (uid 10001), no secrets baked into the image
+- [x] `compose.yaml`: app only, bound to 127.0.0.1, read-only rootfs, secret mount
+- [x] GitHub Actions → GHCR on tag
+- [x] Checkpoint: image built and run; full OAuth dance plus a live
+      `list_courses` returning 11 real courses, with the token supplied as a
+      mounted file rather than an environment variable
+
+The `/data` volume is load-bearing. It holds the OAuth database, and without
+it every redeploy silently deauthorizes the connector and demands a browser
+round trip.
+
+The health check deliberately does not call Canvas. Depending on an external
+service would mark the container unhealthy during a Canvas outage it cannot do
+anything about, and invite an orchestrator to restart it pointlessly.
 
 No `cloudflared` sidecar: canvas-viewer-mcp.lenny.zone is served directly, so
 TLS terminates in the existing reverse proxy and the container speaks plain

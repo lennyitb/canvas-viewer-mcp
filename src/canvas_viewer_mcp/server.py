@@ -23,7 +23,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
+from . import __version__
 from .canvas.assignments import fetch_assignments, flatten_assignment
 from .canvas.client import CanvasClient
 from .canvas.content import (
@@ -285,6 +288,18 @@ async def list_modules(course_id: int) -> dict[str, Any]:
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
     return {"count": len(modules), "modules": [m.model_dump() for m in modules]}
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> Response:
+    """Liveness probe.
+
+    Deliberately does not call Canvas. A health check that depended on an
+    external service would report this container unhealthy -- and invite an
+    orchestrator to restart it -- during a Canvas outage it can do nothing
+    about. Canvas reachability is a matter for the tools, which can say so.
+    """
+    return JSONResponse({"status": "ok", "version": __version__})
 
 
 def enable_http_auth() -> None:

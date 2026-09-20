@@ -1,0 +1,45 @@
+# canvas-viewer-mcp
+#
+# Binds to localhost only. canvas-viewer-mcp.lenny.zone is served by the
+# existing reverse proxy, which terminates TLS and forwards here; publishing
+# this port on 0.0.0.0 would expose the MCP endpoint without that TLS layer.
+
+services:
+  canvas-viewer-mcp:
+    image: ghcr.io/lennyitb/canvas-viewer-mcp:latest
+    # Or build locally:  docker compose build
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      CANVAS_BASE_URL: https://vsc.instructure.com
+      PUBLIC_BASE_URL: https://canvas-viewer-mcp.lenny.zone
+      # The argon2 hash, never the password. Generate with:
+      #   canvas-probe hash-password
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:?set AUTH_PASSWORD_HASH in .env}
+    secrets:
+      - canvas_token
+    volumes:
+      # OAuth state. Drop this and every redeploy deauthorizes the connector.
+      - canvas-viewer-mcp-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+secrets:
+  canvas_token:
+    # Mounted at /run/secrets/canvas_token; the value never enters an
+    # environment variable, the process list, or an image layer.
+    file: ${CANVAS_TOKEN_FILE:-./secrets/canvas_token}
+
+volumes:
+  canvas-viewer-mcp-data:

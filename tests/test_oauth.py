@@ -36,7 +36,7 @@ def _configured(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         {
             "PUBLIC_BASE_URL": PUBLIC_URL,
             "AUTH_PASSWORD_HASH": hash_password(PASSWORD),
-            "AUTH_DB_PATH": str(db),
+            "DB_PATH": str(db),
             "CANVAS_BASE_URL": "https://canvas.test",
             "CANVAS_TOKEN": "test-token",
         }

@@ -100,7 +100,7 @@ class AuthConfig:
         if not password_hash.startswith("$argon2"):
             raise ConfigError("AUTH_PASSWORD_HASH does not look like an argon2 hash.")
 
-        db = os.environ.get("AUTH_DB_PATH", "").strip()
+        db = os.environ.get("DB_PATH", "").strip()
         return cls(
             public_base_url=_read_public_base_url(),
             password_hash=password_hash,
