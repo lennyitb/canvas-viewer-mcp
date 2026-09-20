@@ -104,7 +104,14 @@ def main() -> int:
 
     for skill_dir in skill_dirs:
         out = build(skill_dir, args.out)
-        print(f"{out.relative_to(REPO_ROOT)}  ({out.stat().st_size} bytes)")
+        # --out may point anywhere, including outside the checkout, so a
+        # repo-relative name is a convenience rather than something to insist
+        # on; relative_to raises rather than falling back on its own.
+        try:
+            shown: Path | str = out.relative_to(REPO_ROOT)
+        except ValueError:
+            shown = out
+        print(f"{shown}  ({out.stat().st_size} bytes)")
     return 0
 
 
