@@ -1,0 +1,10 @@
+{
+  "canvas-viewer": {
+    "command": "uvx",
+    "args": [
+      "--from",
+      "git+https://github.com/lennyitb/canvas-viewer-mcp",
+      "canvas-viewer-mcp"
+    ]
+  }
+}

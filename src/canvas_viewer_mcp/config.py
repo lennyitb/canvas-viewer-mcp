@@ -1,29 +1,91 @@
 """Configuration loading.
 
-The Canvas token is deliberately never read from a file inside the repository.
-It comes from CANVAS_TOKEN, or from a file path given by CANVAS_TOKEN_FILE
-(which is how the container receives it, via a mounted secret).
+Three sources, in descending precedence: the environment, a TOML file at
+``~/.config/canvas-viewer-mcp/config.toml``, and built-in defaults. The
+environment wins because the container passes its configuration that way, and
+a stale file in a developer's home directory must never quietly override a
+deployed setting.
+
+The Canvas token is deliberately never read from a file inside the repository,
+and never from ``config.toml`` either. It comes from CANVAS_TOKEN, or from a
+file path given by CANVAS_TOKEN_FILE (which is how the container receives it,
+via a mounted secret), or from a file beside the config. Keeping it in its own
+file means ``config.toml`` stays safe to paste into a bug report.
 """
 
 from __future__ import annotations
 
 import os
+import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-DEFAULT_TOKEN_FILE = Path.home() / ".config" / "canvas-viewer-mcp" / "token"
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "canvas-viewer-mcp"
+DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.toml"
+DEFAULT_TOKEN_FILE = DEFAULT_CONFIG_DIR / "token"
 
 
 class ConfigError(RuntimeError):
     """Raised when required configuration is missing or unusable."""
 
 
-def _read_token() -> str:
+def _config_file_path() -> Path:
+    override = os.environ.get("CANVAS_CONFIG_FILE", "").strip()
+    return Path(override).expanduser() if override else DEFAULT_CONFIG_FILE
+
+
+def _default_token_file() -> Path:
+    """The token sits beside the config file, so relocating one relocates both.
+
+    With CANVAS_CONFIG_FILE unset this is exactly DEFAULT_TOKEN_FILE. Pointing
+    CANVAS_CONFIG_FILE at another directory moves the whole configuration
+    there rather than leaving the token behind in the home directory, which
+    also keeps a developer's real token out of the test suite.
+    """
+    return _config_file_path().parent / "token"
+
+
+def _load_file_config() -> Mapping[str, Any]:
+    """Values from config.toml, or an empty mapping when there is no file.
+
+    A missing file is the normal case for the container, which is configured
+    entirely from the environment, so it is not an error.
+    """
+    path = _config_file_path()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except PermissionError:
+        raise ConfigError(f"Cannot read {path}: permission denied.") from None
+
+    try:
+        loaded: dict[str, Any] = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path} is not valid TOML: {exc}") from None
+    return loaded
+
+
+def _file_str(file_config: Mapping[str, Any], key: str) -> str:
+    """One string value from the config file, or "" when absent."""
+    value = file_config.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ConfigError(
+            f"{_config_file_path()}: {key} must be a string, got {type(value).__name__}."
+        )
+    return value.strip()
+
+
+def _read_token(file_config: Mapping[str, Any]) -> str:
     if token := os.environ.get("CANVAS_TOKEN"):
         return token.strip()
 
-    override = os.environ.get("CANVAS_TOKEN_FILE")
-    path = Path(override) if override else DEFAULT_TOKEN_FILE
+    override = os.environ.get("CANVAS_TOKEN_FILE") or _file_str(file_config, "token_file")
+    path = Path(override).expanduser() if override else _default_token_file()
     try:
         token = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
@@ -36,10 +98,13 @@ def _read_token() -> str:
     return token
 
 
-def _read_base_url() -> str:
-    host = os.environ.get("CANVAS_BASE_URL", "").strip()
+def _read_base_url(file_config: Mapping[str, Any]) -> str:
+    host = os.environ.get("CANVAS_BASE_URL", "").strip() or _file_str(file_config, "base_url")
     if not host:
-        raise ConfigError("CANVAS_BASE_URL is not set (e.g. https://yourschool.instructure.com).")
+        raise ConfigError(
+            "No Canvas host. Set CANVAS_BASE_URL, or write base_url into "
+            f"{_config_file_path()} (e.g. https://yourschool.instructure.com)."
+        )
     if not host.startswith(("http://", "https://")):
         host = f"https://{host}"
     return host.rstrip("/")
@@ -74,7 +139,9 @@ class Config:
 
     @classmethod
     def from_env(cls) -> Config:
-        return cls(base_url=_read_base_url(), token=_read_token())
+        """Resolve from the environment, falling back to config.toml."""
+        file_config = _load_file_config()
+        return cls(base_url=_read_base_url(file_config), token=_read_token(file_config))
 
     def __repr__(self) -> str:
         # Never let the token reach a log line or traceback.

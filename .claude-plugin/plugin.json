@@ -1,0 +1,12 @@
+{
+  "name": "canvas-viewer",
+  "description": "Read-only Canvas LMS access plus two skills that turn it into a prioritized list of what schoolwork is actually left, working around Canvas due dates that instructors never rolled forward.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lenny Phelan"
+  },
+  "homepage": "https://github.com/lennyitb/canvas-viewer-mcp",
+  "repository": "https://github.com/lennyitb/canvas-viewer-mcp",
+  "license": "MIT",
+  "keywords": ["canvas", "lms", "education", "assignments", "mcp"]
+}

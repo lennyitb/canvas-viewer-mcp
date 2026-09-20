@@ -15,3 +15,7 @@ data
 token
 *.token
 PLAN.md
+skills
+.claude-plugin
+.mcp.json
+DEPLOY.md

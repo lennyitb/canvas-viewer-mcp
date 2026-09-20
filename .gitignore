@@ -40,3 +40,6 @@ htmlcov/
 *.swp
 .idea/
 .vscode/
+
+# ---- exported skill bundles (the skills themselves are committed) ----
+skills/*.zip

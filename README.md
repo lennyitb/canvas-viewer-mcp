@@ -102,11 +102,59 @@ lean and detail is opt-in:
   by `get_assignment` and `get_discussion` per discussion. On a course with 20
   graded discussions that is roughly 14k characters in place of 765k.
 
+## Skills
+
+The server reports; it doesn't conclude. Two skills do the concluding, and ship
+in this repo as a Claude Code plugin alongside the server itself:
+
+| Skill | Does |
+| --- | --- |
+| `canvas-week-report` | A prioritized "what's actually left" list: converts UTC deadlines to local time, estimates real dates for assignments whose course was copied without rolling the dates forward, and counts discussion replies still owed against what the description asks for. Budgeted to about four tool calls. |
+| `canvas-dashboard` | Runs that gather in a Sonnet subagent, then publishes the result as a dashboard artifact with announcements and a written summary. Needs a client with subagents and artifacts. |
+
+Install both, plus the server, in one step:
+
+```
+/plugin marketplace add lennyitb/canvas-viewer-mcp
+/plugin install canvas-viewer@canvas-viewer
+```
+
+then configure it:
+
+```
+/canvas-viewer:setup
+```
+
+Setup finds your Canvas host by school name, links you to the page that mints a
+token, stores both under `~/.config/canvas-viewer-mcp/`, and verifies the whole
+path before it says it worked. Nothing goes in a shell profile.
+
+The server runs over stdio via `uvx` — on your machine, against your own Canvas
+host and token, with no login and no hosted instance in the path. To point the
+plugin at a deployed instance instead, replace [.mcp.json](.mcp.json) with the
+HTTP form from [DEPLOY.md](DEPLOY.md).
+
+Skills are a Claude Code mechanism. Other MCP clients get the twelve tools and
+the server's own usage instructions, but not the skills; on claude.ai, a skill
+folder can be zipped and uploaded under Settings → Capabilities.
+
 ## Configuration
 
-See [.env.example](.env.example). The Canvas API token is never read from inside
-the repository; supply it via `CANVAS_TOKEN`, a `CANVAS_TOKEN_FILE` path (how the
-container receives it), or `~/.config/canvas-viewer-mcp/token`.
+Three sources, in descending precedence: environment variables, a TOML file at
+`~/.config/canvas-viewer-mcp/config.toml`, then defaults. The environment wins so
+that a leftover file in a home directory can never redirect a deployed container.
+
+```toml
+# ~/.config/canvas-viewer-mcp/config.toml — written by /canvas-viewer:setup
+base_url = "https://yourschool.instructure.com"
+# token_file = "/some/other/path"   # optional; defaults to ./token beside this file
+```
+
+See [.env.example](.env.example) for the environment form, which is what the
+container uses. The Canvas API token is never read from inside the repository and
+never from `config.toml`; supply it via `CANVAS_TOKEN`, a `CANVAS_TOKEN_FILE` path
+(how the container receives it), or `~/.config/canvas-viewer-mcp/token`. Keeping
+it in its own file is what makes `config.toml` safe to paste into a bug report.
 
 Generate a token in Canvas under **Account → Settings → Approved Integrations →
 "+ New Access Token"**. It grants full access to your Canvas account, so treat it

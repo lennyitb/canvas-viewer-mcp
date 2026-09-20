@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "canvas-viewer",
+  "description": "The canvas-viewer-mcp connector and the skills that read it",
+  "owner": {
+    "name": "Lenny Phelan",
+    "url": "https://github.com/lennyitb"
+  },
+  "plugins": [
+    {
+      "name": "canvas-viewer",
+      "source": "./",
+      "category": "productivity",
+      "description": "Read-only Canvas LMS access plus two skills that turn it into a prioritized list of what schoolwork is actually left.",
+      "homepage": "https://github.com/lennyitb/canvas-viewer-mcp"
+    }
+  ]
+}
