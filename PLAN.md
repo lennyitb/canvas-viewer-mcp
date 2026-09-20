@@ -125,9 +125,23 @@ TLS terminates in the existing reverse proxy and the container speaks plain
 HTTP on its port.
 
 ## Stage 6 — Deploy and connect
-- [ ] Pull image on target host, bring up tunnel
+
+Prepared here; the remaining steps need the homelab and the claude.ai account.
+
+- [x] `v0.1.0` tagged, image published and verified to pull **anonymously**
+      from `ghcr.io/lennyitb/canvas-viewer-mcp` (`:latest` and `:0.1.0`)
+- [x] Published image smoke-tested: healthy, metadata advertises the public
+      https URL, anonymous `/mcp` refused with 401
+- [x] [DEPLOY.md](DEPLOY.md) written
 - [ ] DNS: `A canvas-viewer-mcp.lenny.zone -> <public IP>`
-- [ ] Add custom connector on claude.ai, verify from phone
+- [ ] `docker compose up -d` on the homelab, with the two secrets in place
+- [ ] Reverse proxy vhost -> `127.0.0.1:8000`, **`proxy_buffering off`**
+- [ ] Add the custom connector on claude.ai, then verify from the phone
+
+Buffering is the one that will waste an evening if missed: MCP streams over
+server-sent events, and a buffering proxy holds the stream until it fills, so
+the symptom is tool calls that hang and time out rather than anything that
+looks like a proxy problem.
 
 ## Running concern — response size
 Tool results consume model context and mobile latency. List tools return
