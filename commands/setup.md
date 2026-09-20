@@ -41,9 +41,9 @@ curl -s --get --data-urlencode "search_term=<school name>" \
 ```
 
 Each result has `name` and `domain`. Several accounts commonly share one
-domain (a district or state system), so **deduplicate by `domain`** before
-offering choices — "Vermont State Colleges", "CCV" and "VTC" are all
-`vsc.instructure.com`, and presenting them as three options is confusing.
+domain — the campuses of a state system, or the schools in a district, are
+often one Canvas install — so **deduplicate by `domain`** before offering
+choices. Three names that resolve to the same host are one option, not three.
 
 Use `AskUserQuestion` to let the user pick when more than one distinct domain
 comes back. Label each option with the domain and list the school names it

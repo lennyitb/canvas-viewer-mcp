@@ -1,8 +1,11 @@
 # canvas-viewer-mcp
 #
-# Binds to localhost only. canvas-viewer-mcp.lenny.zone is served by the
-# existing reverse proxy, which terminates TLS and forwards here; publishing
-# this port on 0.0.0.0 would expose the MCP endpoint without that TLS layer.
+# Binds to localhost only. Your public hostname is served by a reverse proxy,
+# which terminates TLS and forwards here; publishing this port on 0.0.0.0 would
+# expose the MCP endpoint without that TLS layer.
+#
+# Every deployment-specific value comes from .env -- see DEPLOY.md. Nothing in
+# this file is specific to one school or one domain.
 
 services:
   canvas-viewer-mcp:
@@ -13,8 +16,10 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      CANVAS_BASE_URL: https://vsc.instructure.com
-      PUBLIC_BASE_URL: https://canvas-viewer-mcp.lenny.zone
+      CANVAS_BASE_URL: ${CANVAS_BASE_URL:?set CANVAS_BASE_URL in .env, e.g. https://yourschool.instructure.com}
+      # The public HTTPS URL Claude reaches this server on. Getting this wrong
+      # points the connector's OAuth flow at whatever host it names.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env, e.g. https://canvas-viewer-mcp.example.com}
       # The argon2 hash, never the password. Generate with:
       #   canvas-probe hash-password
       AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:?set AUTH_PASSWORD_HASH in .env}

@@ -1,14 +1,19 @@
 # Deploying canvas-viewer-mcp
 
-Serving `canvas-viewer-mcp.lenny.zone` directly, with TLS terminated by an
-existing reverse proxy.
+Serving the MCP endpoint directly, with TLS terminated by an existing reverse
+proxy.
+
+Throughout this guide, replace `canvas-viewer-mcp.example.com` with your own
+hostname and `yourschool.instructure.com` with your institution's Canvas host.
+Nothing is baked into the repository: `compose.yaml` takes every
+deployment-specific value from `.env` and refuses to start rather than guess.
 
 ## 1. DNS
 
 One record, pointing at the public IP of the machine running the proxy:
 
 ```
-canvas-viewer-mcp.lenny.zone.  A  <your public IP>
+canvas-viewer-mcp.example.com.  A  <your public IP>
 ```
 
 If the record is proxied through Cloudflare (orange cloud), set SSL/TLS mode to
@@ -31,16 +36,29 @@ chmod 600 /srv/canvas-viewer-mcp/secrets/canvas_token
 canvas-probe hash-password
 ```
 
-Put the resulting hash in `/srv/canvas-viewer-mcp/.env`:
+## 3. Environment
+
+`/srv/canvas-viewer-mcp/.env` carries everything that differs between
+deployments. All four values are required; `compose.yaml` fails to parse
+without the first three, naming the one that is missing.
 
 ```
+CANVAS_BASE_URL=https://yourschool.instructure.com
+PUBLIC_BASE_URL=https://canvas-viewer-mcp.example.com
 AUTH_PASSWORD_HASH='$argon2id$v=19$...'
 CANVAS_TOKEN_FILE=/srv/canvas-viewer-mcp/secrets/canvas_token
 ```
 
 Quote the hash. It contains `$`, which an unquoted value will mangle.
 
-## 3. Run
+`PUBLIC_BASE_URL` is the one to get right. The server advertises OAuth metadata
+built from it, so a wrong value sends Claude to authorize against whatever host
+it names -- which means someone else's server, if you copied their value.
+
+## 4. Run
+
+Write `.env` before fetching `compose.yaml`: with values missing, every compose
+subcommand refuses to parse the file, `logs` and `pull` included.
 
 ```bash
 cd /srv/canvas-viewer-mcp
@@ -51,12 +69,12 @@ docker compose logs -f
 
 The container listens on `127.0.0.1:8000` and never on a public interface.
 
-## 4. Reverse proxy
+## 5. Reverse proxy
 
 Point the vhost at `127.0.0.1:8000`. Caddy:
 
 ```caddy
-canvas-viewer-mcp.lenny.zone {
+canvas-viewer-mcp.example.com {
     reverse_proxy 127.0.0.1:8000
 }
 ```
@@ -80,28 +98,28 @@ location / {
 proxy holds the stream until it fills, which surfaces as tool calls that hang
 and then time out.
 
-## 5. Verify before touching Claude
+## 6. Verify before touching Claude
 
 ```bash
-curl -s https://canvas-viewer-mcp.lenny.zone/health
-curl -s https://canvas-viewer-mcp.lenny.zone/.well-known/oauth-authorization-server | jq .
+curl -s https://canvas-viewer-mcp.example.com/health
+curl -s https://canvas-viewer-mcp.example.com/.well-known/oauth-authorization-server | jq .
 
 # Must be 401 -- an anonymous caller has no business here.
 curl -s -o /dev/null -w '%{http_code}\n' \
-  -X POST https://canvas-viewer-mcp.lenny.zone/mcp \
+  -X POST https://canvas-viewer-mcp.example.com/mcp \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-Every URL in the metadata must begin `https://canvas-viewer-mcp.lenny.zone`.
+Every URL in the metadata must begin `https://canvas-viewer-mcp.example.com`.
 If any says `http://` or a local address, `PUBLIC_BASE_URL` is wrong and Claude
 will refuse the connector.
 
-## 6. Add the connector
+## 7. Add the connector
 
 On **claude.ai** (not mobile -- new connectors cannot be added there):
 Settings → Connectors → Add custom connector →
-`https://canvas-viewer-mcp.lenny.zone/mcp`
+`https://canvas-viewer-mcp.example.com/mcp`
 
 Claude registers itself dynamically, then sends you to the login page. Enter
 the password from step 2. Once authorized, the connector is attached to your
@@ -112,6 +130,14 @@ account and the iOS and Android apps pick it up automatically.
 ```bash
 docker compose pull && docker compose up -d
 ```
+
+**Upgrading from a compose.yaml that hardcoded the host.** Earlier revisions
+carried `CANVAS_BASE_URL` and `PUBLIC_BASE_URL` as literals in `compose.yaml`.
+They are now required `.env` values. Add both to `.env` *before* pulling the
+new `compose.yaml`; in that order there is no window where compose cannot read
+its own file. A running container is unaffected either way -- an unparseable
+compose.yaml stops nothing that is already up, it only blocks further compose
+commands.
 
 The OAuth database lives in the `canvas-viewer-mcp-data` volume, so the
 connector stays authorized across upgrades. Delete that volume and you will be
@@ -128,7 +154,7 @@ geo-rule blocks it.
 than the connector. Check `docker compose logs`; a 401 from Canvas means the
 token was revoked or expired, and a fresh one goes in the secrets file.
 
-**Tool calls hang, then time out** — proxy buffering. See step 4.
+**Tool calls hang, then time out** — proxy buffering. See step 5.
 
 **Re-authorized after a redeploy** — the `/data` volume was not persisted.
 
