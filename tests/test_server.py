@@ -231,6 +231,9 @@ async def test_announcement_bodies_can_be_left_out() -> None:
 
     assert "due Friday" in full["announcements"][0]["message"]
     assert "message" not in lean["announcements"][0]
+    assert full["announcements"][0]["course_id"] == 1, (
+        "the announcements endpoint names the course with context_code, not course_id"
+    )
     codes = route.calls.last.request.url.params.get_list("context_codes[]")
     assert codes == ["course_2"], "course_id narrows the sweep to that course"
     assert one["count"] == 1
@@ -274,3 +277,26 @@ async def test_no_tool_can_write() -> None:
 
     for verb in ("post", "put", "patch", "delete"):
         assert not hasattr(CanvasClient, verb), f"CanvasClient grew a {verb} method"
+
+
+def test_topic_course_id_survives_every_shape_canvas_sends() -> None:
+    """A topic's course must resolve whichever field carries it.
+
+    ``courses/{id}/discussion_topics`` sends ``course_id``; the account-wide
+    ``announcements`` endpoint sends ``context_code``; a stray row may carry
+    neither and only link into the course.
+    """
+    from canvas_viewer_mcp.canvas.content import flatten_topic
+
+    row = {"id": 5, "title": "t"}
+
+    assert flatten_topic({**row, "course_id": 7}).course_id == 7
+    assert flatten_topic({**row, "context_code": "course_7"}).course_id == 7
+    assert flatten_topic({**row, "context_code": "user_7"}).course_id is None
+    assert (
+        flatten_topic(
+            {**row, "html_url": "https://canvas.test/courses/7/discussion_topics/5"}
+        ).course_id
+        == 7
+    )
+    assert flatten_topic(row).course_id is None
