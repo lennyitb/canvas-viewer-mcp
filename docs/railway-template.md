@@ -14,7 +14,7 @@ it is deprecated, new services cannot opt into it, and it stops being read on
 The audience is students, not operators. The three things a hosted MCP server
 needs — a hostname, a place to keep its OAuth database, and somewhere to put
 two secrets — are exactly the three things that make a self-hosted install a
-weekend project. A template turns them into a form with two fields, and the
+weekend project. A template turns them into a form with three fields, and the
 deploy is into the student's own Railway account: their project, their
 container, their volume, their Canvas token. Nothing routes through the
 maintainer's infrastructure, and there is no shared instance to be a single
@@ -90,9 +90,36 @@ the deployer being handed a URL without going looking for one.
 ## Publishing
 
 Create it under Workspace Settings → Templates → New Template, fill in the
-above, then copy the template URL from the composer. It looks like
-`https://railway.com/deploy/xxxxxx`. Put that URL in the README button, which
-currently carries `RAILWAY_TEMPLATE_URL` as a placeholder.
+above, then copy the template URL from the composer and put it in the README
+button.
+
+The published template is **`https://railway.com/deploy/1cOY5u`**. Its
+configuration can be read back without logging in, which is the quickest way
+to check an edit actually took:
+
+```bash
+curl -s -X POST https://backboard.railway.com/graphql/v2 \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"query($code:String!){template(code:$code){name description serializedConfig}}",
+       "variables":{"code":"1cOY5u"}}' | python3 -m json.tool
+```
+
+The share URL carries a `referralCode`. That is Railway's default and it
+credits the template author for signups; drop the parameter if the README
+should not carry it.
+
+### Still to fill in
+
+The template deploys correctly, but three descriptions are empty, and they are
+the part the design actually rests on. With no wizard, the deploy form *is*
+the documentation: someone who has never opened a terminal sees three blank
+boxes named `CANVAS_BASE_URL`, `CANVAS_TOKEN` and `AUTH_PASSWORD` and has
+nothing telling them what belongs in any of them. The text to paste is under
+**Variables** above.
+
+Also unset: the template's own name, which Railway generated as `warm-wild`,
+and its description. Both are what a stranger sees before deciding to trust it
+with a Canvas token.
 
 ## Checking it still works
 

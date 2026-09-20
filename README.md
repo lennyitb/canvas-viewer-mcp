@@ -52,10 +52,10 @@ coursework.
 
 ### 1. Run the server
 
-**The easy way — Railway.** One click, two fields, about three minutes. Railway
-runs the container, gives it an HTTPS address, and keeps it on.
+**The easy way — Railway.** One click, three fields, about three minutes.
+Railway runs the container, gives it an HTTPS address, and keeps it on.
 
-[![Deploy on Railway](https://railway.com/button.svg)](RAILWAY_TEMPLATE_URL)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/1cOY5u?referralCode=fkprGJ&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 It asks for three things:
 
