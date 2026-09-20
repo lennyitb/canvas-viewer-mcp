@@ -40,3 +40,8 @@ htmlcov/
 *.swp
 .idea/
 .vscode/
+
+# ---- built skill bundles (the skills themselves are committed) ----
+# `scripts/build_skill_zips.py` writes dist/; the release job attaches it.
+dist/
+skills/*.zip

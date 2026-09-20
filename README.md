@@ -37,8 +37,112 @@ absent. It cannot submit work, post to a discussion, or alter your Canvas accoun
 ## Status
 
 Working. Twelve read-only tools over MCP, fronted by a single-user OAuth 2.1
-server, running in a container. See [DEPLOY.md](DEPLOY.md) to run it and
-[PLAN.md](PLAN.md) for how it was built.
+server, running in a container. See [PLAN.md](PLAN.md) for how it was built.
+
+## Install
+
+Three steps: run your own copy of the server, connect Claude to it, add the
+skills. Fifteen minutes, and nothing after step 1 involves a terminal.
+
+**Every install is its own instance.** You deploy your own container, holding
+your own Canvas token, at your own address, with its own login. There is no
+shared server in the middle — nothing about this depends on the author's
+deployment continuing to exist, and no one else's instance can see your
+coursework.
+
+### 1. Run the server
+
+**The easy way — Railway.** One click, two fields, about three minutes. Railway
+runs the container, gives it an HTTPS address, and keeps it on.
+
+[![Deploy on Railway](https://railway.com/button.svg)](RAILWAY_TEMPLATE_URL)
+
+It asks for three things:
+
+| | |
+| --- | --- |
+| **Your Canvas address** | Open Canvas in another tab and copy the address bar. Anything after the site name is trimmed off, so a link to a course works fine. |
+| **Your Canvas token** | Canvas → Account → Settings → Approved Integrations → **"+ New Access Token"**. Leave the expiry blank. Copy it — Canvas shows it once. |
+| **A password you choose** | At least 12 characters. Claude asks for it once, when you connect. |
+
+That is the whole configuration. There is no fourth field for the server's own
+public URL, which is the value a one-click install would otherwise founder on:
+nobody can know it before deploying, because the platform assigns it. The
+server reads it from the platform instead.
+
+When the deploy finishes Railway assigns the service a public address. Your
+connector URL is that address with `/mcp` on the end:
+`https://something.up.railway.app/mcp`. (If the service shows no domain, open
+**Settings → Networking → Generate Domain**.)
+
+Railway is about $5/month. [docs/railway-template.md](docs/railway-template.md)
+records exactly what the button deploys.
+
+**Your own server.** If you already run things behind a reverse proxy,
+[DEPLOY.md](DEPLOY.md) has the `docker compose` path. Same container, same
+three values, in a `.env` file.
+
+**On your own machine.** If you use Claude Code or another client that can
+launch a local process, you can skip hosting entirely and run the server over
+stdio — no OAuth, no public address, no monthly bill, and it only runs while
+you're using it. It won't reach claude.ai in a browser or the phone apps.
+
+```bash
+pipx install canvas-viewer-mcp   # or: uvx canvas-viewer-mcp
+mkdir -p ~/.config/canvas-viewer-mcp
+printf 'base_url = "https://yourschool.instructure.com"\n' > ~/.config/canvas-viewer-mcp/config.toml
+install -m 600 /dev/null ~/.config/canvas-viewer-mcp/token
+read -rs CANVAS_TOKEN && printf '%s' "$CANVAS_TOKEN" > ~/.config/canvas-viewer-mcp/token
+canvas-probe whoami   # should print your name
+```
+
+`read -rs` keeps the token out of your shell history. Then register it with
+your client — for Claude Code:
+
+```bash
+claude mcp add canvas-viewer -- canvas-viewer-mcp
+```
+
+### 2. Connect Claude to it
+
+Skip this if you're running over stdio; your client already has it.
+
+On **claude.ai** in a browser — not the mobile apps, which can't add new
+connectors:
+
+**Settings → Connectors → Add custom connector**, and paste your
+`https://.../mcp` URL.
+
+Claude registers itself and sends you to a login page. Enter the password you
+chose. Once it's authorized, the iOS and Android apps pick it up on their own.
+
+### 3. Install the skills
+
+The server reports; it doesn't conclude. The skills do the concluding — they're
+what turns twelve tools into "here's what's actually due".
+
+| Skill | Does |
+| --- | --- |
+| [`canvas-week-report`](skills/canvas-week-report/SKILL.md) | A prioritized "what's actually left" list: converts UTC deadlines to local time, estimates real dates for assignments whose course was copied without rolling the dates forward, and counts discussion replies still owed against what the description asks for. Budgeted to about four tool calls. |
+| [`canvas-dashboard`](skills/canvas-dashboard/SKILL.md) | The same triage rendered as a dashboard page, plus recent announcements and a written summary of the week. Needs a client that can make artifacts. |
+
+Skills install separately from the connector — there's no bundle that carries
+both, on any client.
+
+**On claude.ai:** download `canvas-week-report.zip` and `canvas-dashboard.zip`
+from the [latest release](https://github.com/lennyitb/canvas-viewer-mcp/releases/latest),
+then **Settings → Capabilities → Skills → Upload skill**, once per file. Don't
+re-zip the folders from this repository by hand; the archive needs a layout the
+release build produces for you.
+
+**In Claude Code:** copy the folders instead.
+
+```bash
+git clone https://github.com/lennyitb/canvas-viewer-mcp
+cp -r canvas-viewer-mcp/skills/canvas-* ~/.claude/skills/
+```
+
+Then ask for what's due. Neither skill needs to be named.
 
 ## Tools
 
@@ -104,13 +208,46 @@ lean and detail is opt-in:
 
 ## Configuration
 
-See [.env.example](.env.example). The Canvas API token is never read from inside
-the repository; supply it via `CANVAS_TOKEN`, a `CANVAS_TOKEN_FILE` path (how the
-container receives it), or `~/.config/canvas-viewer-mcp/token`.
+Three sources, in descending precedence: environment variables, a TOML file at
+`~/.config/canvas-viewer-mcp/config.toml`, then defaults. The environment wins
+so that a leftover file in a home directory can never redirect a deployed
+container.
 
-Generate a token in Canvas under **Account → Settings → Approved Integrations →
-"+ New Access Token"**. It grants full access to your Canvas account, so treat it
-like a password.
+```toml
+# ~/.config/canvas-viewer-mcp/config.toml
+base_url = "https://yourschool.instructure.com"
+# token_file = "/some/other/path"   # optional; defaults to ./token beside this file
+```
+
+See [.env.example](.env.example) for the environment form, which is what the
+container uses.
+
+The Canvas API token is never read from inside the repository, and never from
+`config.toml` either. It comes from `CANVAS_TOKEN`, a `CANVAS_TOKEN_FILE` path
+(how the container receives it, as a mounted secret), or
+`~/.config/canvas-viewer-mcp/token`. Keeping it in its own file is what makes
+`config.toml` safe to paste into a bug report.
+
+`PUBLIC_BASE_URL` — the address Claude reaches the server on — is read from
+`RAILWAY_PUBLIC_DOMAIN`, `RENDER_EXTERNAL_URL` or `FLY_APP_NAME` when the
+platform sets one, and only needs setting for a custom domain or a reverse
+proxy. It is never inferred from the incoming request, because behind a proxy
+that request arrives as plain http and the OAuth metadata would advertise
+`http://` endpoints that Claude rejects.
+
+The connector login comes from `AUTH_PASSWORD`, or from an argon2
+`AUTH_PASSWORD_HASH` if you'd rather no plaintext were stored (`canvas-probe
+hash-password` generates one). Set neither and the server issues itself a
+pairing code on first run and prints it once to its logs. Setting a password
+deletes a code already issued, which is how one that reached a log aggregator
+gets revoked.
+
+## Revoking access
+
+Revoke the token at **Canvas → Account → Settings → Approved Integrations**.
+That cuts access immediately and independently of everything here — the
+connector password only controls who may authorize, while the Canvas token is
+what actually reads your account.
 
 ## License
 

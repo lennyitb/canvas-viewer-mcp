@@ -14,12 +14,17 @@ parks the request and redirects to a password-gated login page, and only a
 correct password turns a parked request into a code.
 
 Single user throughout. There is no user table, no registration, no account
-recovery -- one argon2 hash in the environment.
+recovery -- one argon2 hash. That hash comes from AUTH_PASSWORD_HASH, or from
+a plaintext AUTH_PASSWORD hashed at startup, or, when neither is set, from a
+pairing code the server issues itself on first run and prints once to the logs.
+Configuring either password form wins outright and deletes the stored code,
+which is how a code printed into a log aggregator gets revoked.
 """
 
 from __future__ import annotations
 
 import secrets
+import sys
 import time
 from urllib.parse import urlencode
 
@@ -47,9 +52,54 @@ PENDING_LOGIN_TTL = 10 * 60
 
 _hasher = PasswordHasher()
 
+PAIRING_SECRET_NAME = "pairing_code_hash"
+
+# No I, L, O, 0 or 1: the code gets read off a terminal and retyped into a
+# browser, and those are the characters that get read wrong.
+_PAIRING_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_PAIRING_LENGTH = 16
+
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)
+
+
+def generate_pairing_code() -> str:
+    """A random code shaped like something a person can retype.
+
+    Sixteen characters from a 31-character alphabet is a shade under 80 bits,
+    which is far past what the login page's throttling and argon2 already make
+    unguessable.
+    """
+    raw = "".join(secrets.choice(_PAIRING_ALPHABET) for _ in range(_PAIRING_LENGTH))
+    return "-".join(raw[i : i + 4] for i in range(0, _PAIRING_LENGTH, 4))
+
+
+def _announce_pairing_code(code: str, public_base_url: str) -> None:
+    """Print the code once, to stderr so it lands in the container logs.
+
+    This is the one moment the plaintext exists outside the operator's head,
+    and it is a real trade: a code in a log file is less protected than a hash
+    in a file only root reads. It buys a deployment that starts without any
+    credential having to be generated, quoted and pasted first.
+    """
+    print(
+        "\n"
+        "  ---------------------------------------------------------------\n"
+        "  No password is set, so this server issued itself a\n"
+        "  pairing code. Use it as the password when Claude sends you to\n"
+        "  the login page.\n"
+        "\n"
+        f"      pairing code:   {code}\n"
+        f"      connector URL:  {public_base_url}/mcp\n"
+        "\n"
+        "  Printed once; only its hash is stored. `canvas-probe\n"
+        "  reset-pairing` then a restart issues a new one. Setting\n"
+        "  AUTH_PASSWORD replaces it and revokes this code.\n"
+        "  ---------------------------------------------------------------\n",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 class SingleUserOAuthProvider(OAuthProvider):
@@ -65,12 +115,43 @@ class SingleUserOAuthProvider(OAuthProvider):
         self.auth_config = auth_config
         self.store = OAuthStore(auth_config.db_path)
         self.store.purge_expired()
+        self._password_hash = self._resolve_credential()
 
     # ---- password ------------------------------------------------------------
 
+    def _resolve_credential(self) -> str:
+        """The one argon2 hash this server will accept.
+
+        Three sources, in order: AUTH_PASSWORD_HASH, a plaintext AUTH_PASSWORD
+        hashed here, and failing both a pairing code the server issues itself.
+
+        A configured credential wins outright *and* deletes any stored pairing
+        code rather than sitting alongside it. Otherwise a code printed into a
+        log aggregator months ago would keep working after a password was set,
+        and worse, would silently come back to life the day that password was
+        cleared. Setting a password is meant to be how you revoke a code, so
+        it has to actually destroy it.
+        """
+        configured = self.auth_config.password_hash or (
+            hash_password(self.auth_config.password) if self.auth_config.password else None
+        )
+        if configured is not None:
+            self.store.delete_server_secret(PAIRING_SECRET_NAME)
+            return configured
+
+        stored = self.store.get_server_secret(PAIRING_SECRET_NAME)
+        if stored is not None:
+            return stored
+
+        code = generate_pairing_code()
+        digest = hash_password(code)
+        self.store.put_server_secret(PAIRING_SECRET_NAME, digest)
+        _announce_pairing_code(code, self.auth_config.public_base_url)
+        return digest
+
     def verify_password(self, password: str) -> bool:
         try:
-            _hasher.verify(self.auth_config.password_hash, password)
+            _hasher.verify(self._password_hash, password)
         except (VerifyMismatchError, VerificationError):
             return False
         return True
@@ -123,14 +204,24 @@ class SingleUserOAuthProvider(OAuthProvider):
         """Turn a parked request into a code, if the password is right.
 
         Returns the redirect URI to send the browser to, or None when the
-        login is wrong or expired. The pending login is consumed either way,
-        so a guessed login_id cannot be retried against it.
+        login is wrong or expired.
+
+        A wrong password leaves the parked request in place so the person can
+        simply type it again. Consuming it on failure would mean that one
+        mistyped character sends them back to Claude to restart authorization
+        from the beginning -- and it buys nothing, because anyone guessing
+        passwords can mint a fresh ``login_id`` by starting their own
+        ``/authorize`` at any time. Guessing is bounded by the login route's
+        per-IP throttle, which is the control that actually applies.
+
+        A correct password still consumes it, so a code is issued once.
         """
-        pending = self.store.take_pending_login(login_id)
+        pending = self.store.get_pending_login(login_id)
         if pending is None:
             return None
         if not self.verify_password(password):
             return None
+        self.store.take_pending_login(login_id)
 
         code = secrets.token_urlsafe(32)
         self.store.put_auth_code(

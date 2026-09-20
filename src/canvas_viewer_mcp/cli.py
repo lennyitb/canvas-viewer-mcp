@@ -124,6 +124,34 @@ async def _run(command: str, course_id: int | None) -> int:
         return await COMMANDS[command](client, course_id)
 
 
+def _reset_pairing() -> int:
+    """Forget the self-issued pairing code so the next start prints a new one.
+
+    Deliberately does not need PUBLIC_BASE_URL or any other deployment value;
+    it is reached from inside a container that may be failing to start.
+    """
+    from .auth.provider import PAIRING_SECRET_NAME
+    from .auth.store import OAuthStore
+    from .config import default_db_path
+
+    path = default_db_path()
+    if not path.exists():
+        print(f"No OAuth database at {path}; nothing to reset.", file=sys.stderr)
+        return 1
+
+    store = OAuthStore(path)
+    try:
+        if store.get_server_secret(PAIRING_SECRET_NAME) is None:
+            print("No pairing code stored. One is issued on the next start.")
+            return 0
+        store.delete_server_secret(PAIRING_SECRET_NAME)
+    finally:
+        store.close()
+
+    print("Pairing code cleared. Restart the server to have a new one printed.")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="canvas-probe",
@@ -131,8 +159,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "command",
-        choices=sorted([*COMMANDS, "hash-password"]),
-        help="what to fetch, or hash-password to generate AUTH_PASSWORD_HASH",
+        choices=sorted([*COMMANDS, "hash-password", "reset-pairing"]),
+        help=(
+            "what to fetch; hash-password generates AUTH_PASSWORD_HASH, "
+            "reset-pairing forgets the self-issued pairing code"
+        ),
     )
     parser.add_argument(
         "--course", type=int, default=None, help="limit to one course id (assignments only)"
@@ -141,6 +172,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "hash-password":
         return _hash_password()
+
+    if args.command == "reset-pairing":
+        return _reset_pairing()
 
     try:
         return asyncio.run(_run(args.command, args.course))
