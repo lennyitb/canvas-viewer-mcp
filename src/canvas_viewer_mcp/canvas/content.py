@@ -23,6 +23,7 @@ endpoint, which returns the entire tree in a single request.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel
@@ -104,11 +105,44 @@ class Module(BaseModel):
     items: list[ModuleItem] = []
 
 
+# ``/courses/123/discussion_topics/456`` -- the course a topic's links sit under.
+_COURSE_PATH = re.compile(r"/courses/(\d+)")
+
+
+def _course_id_of(raw: JsonObject) -> int | None:
+    """The course a topic belongs to, however this endpoint happens to say it.
+
+    A topic fetched under ``courses/{id}/discussion_topics`` carries
+    ``course_id``, but the account-wide ``announcements`` endpoint does not:
+    it names the course with a ``context_code`` of ``course_{id}`` instead.
+    Reading only ``course_id`` there leaves every announcement with a null
+    course, which is the one field a caller needs to act on it.
+    """
+    course_id = raw.get("course_id")
+    if course_id is not None:
+        try:
+            return int(course_id)
+        except (TypeError, ValueError):
+            return None
+
+    code = raw.get("context_code")
+    if isinstance(code, str) and code.startswith("course_") and code[7:].isdigit():
+        return int(code[7:])
+
+    for key in ("html_url", "url"):
+        link = raw.get(key)
+        if isinstance(link, str):
+            found = _COURSE_PATH.search(link)
+            if found:
+                return int(found.group(1))
+    return None
+
+
 def flatten_topic(raw: JsonObject, *, include_message: bool = False) -> DiscussionTopic:
     author = raw.get("author") or {}
     return DiscussionTopic(
         id=raw["id"],
-        course_id=raw.get("course_id"),
+        course_id=_course_id_of(raw),
         title=raw.get("title") or "(untitled)",
         is_announcement=bool(raw.get("is_announcement")),
         posted_at=raw.get("posted_at"),
