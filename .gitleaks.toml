@@ -1,0 +1,13 @@
+# Extends the default gitleaks ruleset with a Canvas-specific rule.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "canvas-lms-access-token"
+description = "Canvas LMS personal access token (<user-id>~<40+ chars>)"
+regex = '''\b[0-9]{3,6}~[A-Za-z0-9]{40,}\b'''
+keywords = ["~"]
+
+[allowlist]
+description = "Scrubbed fixtures use an obviously fake token"
+regexes = ['''0000~SCRUBBEDSCRUBBEDSCRUBBEDSCRUBBEDSCRUBBEDSCRUBBED''']

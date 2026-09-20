@@ -1,0 +1,42 @@
+# ---- secrets: keep at the top, never remove ----
+token
+token.*
+*.token
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+credentials.json
+
+# ---- local state ----
+*.sqlite
+*.sqlite3
+*.db
+data/
+.cache/
+
+# ---- recorded API fixtures (scrubbed ones are committed explicitly) ----
+tests/fixtures/raw/
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---- editor / os ----
+.DS_Store
+*.swp
+.idea/
+.vscode/
