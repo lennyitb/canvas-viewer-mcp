@@ -134,7 +134,7 @@ Prepared here; the remaining steps need the homelab and the claude.ai account.
       https URL, anonymous `/mcp` refused with 401
 - [x] [DEPLOY.md](DEPLOY.md) written
 - [ ] DNS: `A <your hostname> -> <public IP>`
-- [ ] `docker compose up -d` on the homelab, with the two secrets in place
+- [ ] `docker compose up -d` on the homelab, with the Canvas token in place
 - [ ] Reverse proxy vhost -> `127.0.0.1:8000`, **`proxy_buffering off`**
 - [ ] Add the custom connector on claude.ai, then verify from the phone
 
@@ -142,6 +142,30 @@ Buffering is the one that will waste an evening if missed: MCP streams over
 server-sent events, and a buffering proxy holds the stream until it fills, so
 the symptom is tool calls that hang and time out rather than anything that
 looks like a proxy problem.
+
+## Stage 7 — Install without a terminal
+
+Stage 6 gets one person connected. This stage is about somebody else being
+able to, and the constraint that decides everything here is that they use
+claude.ai in a browser and on a phone. That rules out a Claude Code plugin,
+and it rules out a setup command, so whatever a hosting platform's deploy
+form can collect has to be the entire configuration.
+
+Two of the four required values were removed rather than explained:
+`PUBLIC_BASE_URL` is read from the platform (`RAILWAY_PUBLIC_DOMAIN`,
+`RENDER_EXTERNAL_URL`, `FLY_APP_NAME`), and the login accepts a plaintext
+`AUTH_PASSWORD` a form can collect. That leaves the Canvas host and the token.
+
+- [x] `v0.2.0` tagged; image rebuilt with the platform-aware configuration
+- [x] Skills packaged as uploadable zips and attached to the release
+- [x] [docs/railway-template.md](docs/railway-template.md) written
+- [ ] Railway template created and its URL put in the README button
+- [ ] Template deployed into a throwaway project and walked end to end
+
+The check that matters on that last one is the OAuth metadata: every URL it
+advertises must begin with the deploy's own domain. That is the proof the
+platform hostname was picked up, and getting it wrong is the failure that
+sends someone else's Claude to authorize against the wrong server.
 
 ## Running concern — response size
 Tool results consume model context and mobile latency. List tools return
