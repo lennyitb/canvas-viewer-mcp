@@ -11,23 +11,23 @@ views over one field: `due_at`. That works right up until an instructor stops
 maintaining due dates — and then coursework silently disappears from your
 dashboard. It isn't marked late or flagged. It simply isn't there.
 
-This server refuses to trust `due_at` alone. It enumerates coursework with no date
-filter and reports what it finds in three buckets:
+This server refuses to trust `due_at` alone. It enumerates coursework with **no
+date filter** and reports every item it finds, carrying the fields that reveal
+what is actually going on: `due_at`, `unlock_at`, `lock_at`, submission state,
+module position, publication state, and `updated_at`. Assignments with no due
+date are reported like any other, because here their absence of a date is the
+whole point.
 
-| Bucket | Meaning |
-| --- | --- |
-| **Dated & upcoming** | What the dashboard already shows you |
-| **Undated & unsubmitted** | `due_at: null` — invisible to the dashboard |
-| **Stale-dated & unsubmitted** | Past `due_at`, nothing submitted, still unlocked |
+**The server reports; it does not conclude.** There is no bucketing, no
+staleness heuristic, and no guess at what is "really" due. Instructors who
+don't maintain `due_at` usually still say "due Friday" in the assignment text
+or an announcement, so the server also exposes assignment bodies, files,
+discussions, and announcements — the evidence — and leaves the reading of it
+to the model that asked.
 
-It also returns the raw material needed to work out the *real* deadline:
-assignment bodies, recent announcements, module sequencing, and unlock/lock
-windows. Instructors who don't maintain `due_at` usually still say "due Friday"
-in the assignment text or an announcement.
-
-**Deliberately, the server does not guess dates.** It surfaces evidence; the model
-reads it. A date-guessing heuristic buried in a server is wrong in ways you can't
-see, and this is a tool whose entire purpose is to stop missing things.
+This is a deliberate split. Classification logic frozen into a server is wrong
+in ways you cannot see from the outside, and this is a tool whose entire
+purpose is to stop things going missing.
 
 ## Scope
 

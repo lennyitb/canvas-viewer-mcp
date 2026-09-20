@@ -11,19 +11,35 @@ until the current stage is green.
 - [x] Push to GitHub
 
 ## Stage 1 — Canvas client (no MCP yet)
-- [ ] `canvas/client.py`: auth, **Link-header pagination**, rate-limit backoff
-- [ ] `canvas-probe` CLI for direct verification
-- [ ] Checkpoint: `canvas-probe courses` lists real courses
+- [x] `canvas/client.py`: auth, **Link-header pagination**, rate-limit backoff
+- [x] `canvas-probe` CLI for direct verification
+- [x] Checkpoint: `canvas-probe courses` lists 11 real courses against vsc.instructure.com
 
 Pagination is the highest-risk item in the project: miss `rel="next"` and you get
 a partial list with no error — a silent truncation bug in a tool built to stop
 missing things. It gets a dedicated test.
 
-## Stage 2 — Reconciliation logic
-- [ ] Record real API responses as fixtures, then **scrub** them (names, IDs, hostnames)
-- [ ] Pure bucketing functions: dated-upcoming / undated-unsubmitted / stale-unsubmitted
-- [ ] Edge cases: null `due_at`, submitted-ungraded, locked, past-due-submitted, excused
-- [ ] Checkpoint: `pytest` green; `canvas-probe status` shows correct buckets
+## Stage 2 — Assignment dump (normalize, do not interpret)
+
+The server reports; it does not conclude. It fetches coursework with **no date
+filter**, flattens each item to a stable row, and stops there. No bucketing, no
+staleness heuristic, no guess at what is "really" due.
+
+That division is deliberate. Bucketing encodes policy -- what counts as stale,
+what counts as outstanding -- and policy frozen into a server is wrong in ways
+you cannot see from the outside. Deciding it per question, with the assignment
+text and announcements in hand, is both more accurate and less code.
+
+- [ ] Fetch all assignments per course, no date filter, `include[]=submission`
+- [ ] Flatten to a stable row: dates, submission state, points, module, term,
+      publication state, `updated_at`, permalink
+- [ ] Preserve nulls faithfully -- `due_at: null` is the signal, not an absence
+- [ ] Tests: nothing dropped, nulls survive, submission state survives
+- [ ] Checkpoint: `canvas-probe assignments <course>` dumps every assignment
+
+Term metadata stays in the output. The active-course list includes non-course
+shells (orientation, placement, support), and distinguishing them is a
+query-time judgement, not something the server should decide.
 
 ## Stage 3 — MCP server over stdio
 - [ ] Tools: `coursework_status`, `list_courses`, `assignment`, `course_files`,
