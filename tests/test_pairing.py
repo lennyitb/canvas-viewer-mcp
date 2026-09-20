@@ -9,6 +9,7 @@ configured.
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -205,4 +206,62 @@ def test_a_configured_hash_outranks_a_plaintext_password(
 
     assert provider.verify_password("from-the-hash")
     assert not provider.verify_password("from-the-plaintext")
+    provider.store.close()
+
+
+# ---- retrying a mistyped password --------------------------------------------
+
+
+def _park_login(provider: SingleUserOAuthProvider, login_id: str = "parked") -> None:
+    """Put a pending login in the store the way /authorize would."""
+    provider.store.put_pending_login(
+        login_id,
+        {
+            "client_id": "client-1",
+            "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+            "redirect_uri_provided_explicitly": True,
+            "scopes": [],
+            "code_challenge": "challenge",
+            "state": "opaque-state",
+        },
+        expires_at=time.time() + 600,
+    )
+
+
+def test_a_mistyped_password_can_be_retried(
+    env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One wrong character must not send the user back to Claude to restart
+    authorization. Consuming the parked request on failure bounded nothing --
+    a guesser can mint a fresh login_id from /authorize whenever they like --
+    while costing every honest typo the whole flow."""
+    monkeypatch.setenv("AUTH_PASSWORD", "a-chosen-password")
+    provider, _ = _start(capsys)
+    _park_login(provider)
+
+    assert provider.complete_login("parked", "a-chosen-passwerd") is None
+    assert provider.complete_login("parked", "a-chosen-password") is not None
+    provider.store.close()
+
+
+def test_a_successful_login_is_still_single_use(
+    env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The parked request is spent once it has produced a code."""
+    monkeypatch.setenv("AUTH_PASSWORD", "a-chosen-password")
+    provider, _ = _start(capsys)
+    _park_login(provider)
+
+    assert provider.complete_login("parked", "a-chosen-password") is not None
+    assert provider.complete_login("parked", "a-chosen-password") is None
+    provider.store.close()
+
+
+def test_an_unknown_login_id_is_refused(
+    env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("AUTH_PASSWORD", "a-chosen-password")
+    provider, _ = _start(capsys)
+
+    assert provider.complete_login("never-parked", "a-chosen-password") is None
     provider.store.close()

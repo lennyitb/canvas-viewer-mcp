@@ -204,14 +204,24 @@ class SingleUserOAuthProvider(OAuthProvider):
         """Turn a parked request into a code, if the password is right.
 
         Returns the redirect URI to send the browser to, or None when the
-        login is wrong or expired. The pending login is consumed either way,
-        so a guessed login_id cannot be retried against it.
+        login is wrong or expired.
+
+        A wrong password leaves the parked request in place so the person can
+        simply type it again. Consuming it on failure would mean that one
+        mistyped character sends them back to Claude to restart authorization
+        from the beginning -- and it buys nothing, because anyone guessing
+        passwords can mint a fresh ``login_id`` by starting their own
+        ``/authorize`` at any time. Guessing is bounded by the login route's
+        per-IP throttle, which is the control that actually applies.
+
+        A correct password still consumes it, so a code is issued once.
         """
-        pending = self.store.take_pending_login(login_id)
+        pending = self.store.get_pending_login(login_id)
         if pending is None:
             return None
         if not self.verify_password(password):
             return None
+        self.store.take_pending_login(login_id)
 
         code = secrets.token_urlsafe(32)
         self.store.put_auth_code(

@@ -173,6 +173,15 @@ class OAuthStore:
     def put_pending_login(self, login_id: str, data: dict[str, Any], expires_at: float) -> None:
         self._put("pending_logins", "login_id", login_id, data, expires_at)
 
+    def get_pending_login(self, login_id: str) -> dict[str, Any] | None:
+        """Fetch a pending login without consuming it.
+
+        Separate from ``take_pending_login`` so the caller can check the
+        password before deciding whether the parked request is spent. An
+        expired one is deleted and reported as absent, as everywhere else.
+        """
+        return self._get("pending_logins", "login_id", login_id)
+
     def take_pending_login(self, login_id: str) -> dict[str, Any] | None:
         """Fetch and consume a pending login. Single-use by construction."""
         data = self._get("pending_logins", "login_id", login_id)
