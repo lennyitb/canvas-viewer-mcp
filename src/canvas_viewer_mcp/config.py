@@ -110,6 +110,14 @@ def _read_base_url(file_config: Mapping[str, Any]) -> str:
     return host.rstrip("/")
 
 
+def default_db_path() -> Path:
+    """Where the OAuth state lives. The container mounts a volume on it."""
+    db = os.environ.get("DB_PATH", "").strip()
+    if db:
+        return Path(db)
+    return Path.home() / ".local" / "share" / "canvas-viewer-mcp" / "auth.sqlite"
+
+
 def _read_public_base_url() -> str:
     """The URL Anthropic reaches this server on.
 
@@ -153,30 +161,30 @@ class AuthConfig:
     """Configuration for the OAuth server that fronts the MCP endpoint."""
 
     public_base_url: str
-    password_hash: str
+    password_hash: str | None
+    """Configured argon2 hash, or None to let the server issue a pairing code.
+
+    Optional so that a first run needs nothing but a public URL. When it is
+    set it wins outright, which is also how a pairing code is revoked.
+    """
     db_path: Path
 
     @classmethod
     def from_env(cls) -> AuthConfig:
-        password_hash = os.environ.get("AUTH_PASSWORD_HASH", "").strip()
-        if not password_hash:
-            raise ConfigError(
-                "AUTH_PASSWORD_HASH is not set. Generate one with "
-                "`canvas-probe hash-password` and store the hash, not the password."
-            )
-        if not password_hash.startswith("$argon2"):
+        password_hash = os.environ.get("AUTH_PASSWORD_HASH", "").strip() or None
+        if password_hash is not None and not password_hash.startswith("$argon2"):
             raise ConfigError("AUTH_PASSWORD_HASH does not look like an argon2 hash.")
 
-        db = os.environ.get("DB_PATH", "").strip()
         return cls(
             public_base_url=_read_public_base_url(),
             password_hash=password_hash,
-            db_path=Path(db)
-            if db
-            else Path.home() / ".local" / "share" / "canvas-viewer-mcp" / "auth.sqlite",
+            db_path=default_db_path(),
         )
 
     def __repr__(self) -> str:
         # The password hash is not a password, but it is still an offline
-        # cracking target; keep it out of logs.
-        return f"AuthConfig(public_base_url={self.public_base_url!r}, password_hash=<redacted>)"
+        # cracking target; keep it out of logs. Whether one is configured is
+        # not a secret, and knowing it is the difference between debugging a
+        # wrong password and debugging a pairing code.
+        configured = "<redacted>" if self.password_hash else "None"
+        return f"AuthConfig(public_base_url={self.public_base_url!r}, password_hash={configured})"

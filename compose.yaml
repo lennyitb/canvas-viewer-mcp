@@ -20,9 +20,11 @@ services:
       # The public HTTPS URL Claude reaches this server on. Getting this wrong
       # points the connector's OAuth flow at whatever host it names.
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env, e.g. https://canvas-viewer-mcp.example.com}
-      # The argon2 hash, never the password. Generate with:
-      #   canvas-probe hash-password
-      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:?set AUTH_PASSWORD_HASH in .env}
+      # Optional. Leave unset and the server issues itself a pairing code on
+      # first run, printed once to `docker compose logs`. Set it (the argon2
+      # hash, never the password, from `canvas-probe hash-password`) to choose
+      # your own and revoke any code already issued.
+      AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-}
     secrets:
       - canvas_token
     volumes:

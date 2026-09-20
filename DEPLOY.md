@@ -21,35 +21,40 @@ If the record is proxied through Cloudflare (orange cloud), set SSL/TLS mode to
 Flexible: it re-encrypts to your origin over plain HTTP, and the OAuth bearer
 tokens this server issues would cross that leg in the clear.
 
-## 2. Secrets
+## 2. The Canvas token
 
-Two, neither of which belongs in the repo or in an environment variable in
-shell history.
+One secret, and it does not belong in the repo or in an environment variable in
+shell history. The container mounts it as a file.
 
 ```bash
-# The Canvas API token, as a file the container mounts.
 install -d -m 700 /srv/canvas-viewer-mcp/secrets
 cp ~/.config/canvas-viewer-mcp/token /srv/canvas-viewer-mcp/secrets/canvas_token
 chmod 600 /srv/canvas-viewer-mcp/secrets/canvas_token
-
-# The connector login password, stored as an argon2 hash.
-canvas-probe hash-password
 ```
+
+There is no second secret to prepare. The connector login is gated by a pairing
+code the server issues itself on first run and prints once to its logs; step 4
+picks it up. If you would rather choose a password, run `canvas-probe
+hash-password` and put the hash in `AUTH_PASSWORD_HASH` below -- setting it also
+revokes any pairing code already issued.
 
 ## 3. Environment
 
 `/srv/canvas-viewer-mcp/.env` carries everything that differs between
-deployments. All four values are required; `compose.yaml` fails to parse
-without the first three, naming the one that is missing.
+deployments.
 
 ```
 CANVAS_BASE_URL=https://yourschool.instructure.com
 PUBLIC_BASE_URL=https://canvas-viewer-mcp.example.com
-AUTH_PASSWORD_HASH='$argon2id$v=19$...'
 CANVAS_TOKEN_FILE=/srv/canvas-viewer-mcp/secrets/canvas_token
+
+# Optional. Unset means a pairing code is issued instead.
+# AUTH_PASSWORD_HASH='$argon2id$v=19$...'
 ```
 
-Quote the hash. It contains `$`, which an unquoted value will mangle.
+The first two are required: `compose.yaml` fails to parse without them, naming
+the one that is missing. If you do set `AUTH_PASSWORD_HASH`, quote it -- it
+contains `$`, which an unquoted value will mangle.
 
 `PUBLIC_BASE_URL` is the one to get right. The server advertises OAuth metadata
 built from it, so a wrong value sends Claude to authorize against whatever host
@@ -64,10 +69,30 @@ subcommand refuses to parse the file, `logs` and `pull` included.
 cd /srv/canvas-viewer-mcp
 curl -O https://raw.githubusercontent.com/lennyitb/canvas-viewer-mcp/main/compose.yaml
 docker compose up -d
-docker compose logs -f
+docker compose logs
 ```
 
 The container listens on `127.0.0.1:8000` and never on a public interface.
+
+Unless you set `AUTH_PASSWORD_HASH`, the log carries the pairing code:
+
+```
+  No AUTH_PASSWORD_HASH is set, so this server issued itself a
+  pairing code. Use it as the password when Claude sends you to
+  the login page.
+
+      pairing code:   NY5D-FFF5-NYRN-KJ5T
+      connector URL:  https://canvas-viewer-mcp.example.com/mcp
+```
+
+Keep it for step 7. It is printed once and stored only as an argon2 hash, so
+nothing can read it back out; `canvas-probe reset-pairing` followed by a restart
+issues a new one. It survives restarts and upgrades along with the rest of the
+OAuth state in the `/data` volume.
+
+Worth knowing what you are trading: a code in a log file is less protected than
+a hash in a file only root reads, and it follows wherever you ship logs. If that
+matters to you, set `AUTH_PASSWORD_HASH` and the code is never issued.
 
 ## 5. Reverse proxy
 
@@ -122,7 +147,7 @@ Settings → Connectors → Add custom connector →
 `https://canvas-viewer-mcp.example.com/mcp`
 
 Claude registers itself dynamically, then sends you to the login page. Enter
-the password from step 2. Once authorized, the connector is attached to your
+the pairing code from step 4, or your own password if you set one. Once authorized, the connector is attached to your
 account and the iOS and Android apps pick it up automatically.
 
 ## Upgrading

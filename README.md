@@ -160,6 +160,11 @@ Generate a token in Canvas under **Account → Settings → Approved Integration
 "+ New Access Token"**. It grants full access to your Canvas account, so treat it
 like a password.
 
+For a hosted deployment, that token is the only secret to prepare. The connector
+login is gated by a pairing code the server issues itself on first run and prints
+once to its logs; set `AUTH_PASSWORD_HASH` to choose a password instead, which
+also revokes any code already issued. See [DEPLOY.md](DEPLOY.md).
+
 ## License
 
 MIT

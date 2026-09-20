@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS token_links (
     access_token  TEXT PRIMARY KEY,
     refresh_token TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS server_secrets (
+    name       TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -174,6 +179,30 @@ class OAuthStore:
         if data is not None:
             self._delete("pending_logins", "login_id", login_id)
         return data
+
+    # ---- server secrets ------------------------------------------------------
+    #
+    # The self-issued pairing code's argon2 hash lives here rather than in the
+    # environment, so it survives restarts without being printed again and
+    # disappears with the volume -- which is the same event that already
+    # deauthorizes the connector.
+
+    def get_server_secret(self, name: str) -> str | None:
+        row = self._db.execute(
+            "SELECT value FROM server_secrets WHERE name = ?", (name,)
+        ).fetchone()
+        return str(row["value"]) if row else None
+
+    def put_server_secret(self, name: str, value: str) -> None:
+        self._db.execute(
+            "INSERT OR REPLACE INTO server_secrets (name, value, created_at) VALUES (?, ?, ?)",
+            (name, value, time.time()),
+        )
+        self._db.commit()
+
+    def delete_server_secret(self, name: str) -> None:
+        self._db.execute("DELETE FROM server_secrets WHERE name = ?", (name,))
+        self._db.commit()
 
     def purge_expired(self) -> None:
         now = time.time()

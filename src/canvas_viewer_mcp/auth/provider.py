@@ -14,12 +14,16 @@ parks the request and redirects to a password-gated login page, and only a
 correct password turns a parked request into a code.
 
 Single user throughout. There is no user table, no registration, no account
-recovery -- one argon2 hash in the environment.
+recovery -- one argon2 hash. That hash is either configured as
+AUTH_PASSWORD_HASH or, when none is, issued by the server on first run as a
+pairing code printed once to the logs. Configuring a hash wins outright, which
+is also how a code that was printed to a log aggregator gets revoked.
 """
 
 from __future__ import annotations
 
 import secrets
+import sys
 import time
 from urllib.parse import urlencode
 
@@ -47,9 +51,54 @@ PENDING_LOGIN_TTL = 10 * 60
 
 _hasher = PasswordHasher()
 
+PAIRING_SECRET_NAME = "pairing_code_hash"
+
+# No I, L, O, 0 or 1: the code gets read off a terminal and retyped into a
+# browser, and those are the characters that get read wrong.
+_PAIRING_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_PAIRING_LENGTH = 16
+
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)
+
+
+def generate_pairing_code() -> str:
+    """A random code shaped like something a person can retype.
+
+    Sixteen characters from a 31-character alphabet is a shade under 80 bits,
+    which is far past what the login page's throttling and argon2 already make
+    unguessable.
+    """
+    raw = "".join(secrets.choice(_PAIRING_ALPHABET) for _ in range(_PAIRING_LENGTH))
+    return "-".join(raw[i : i + 4] for i in range(0, _PAIRING_LENGTH, 4))
+
+
+def _announce_pairing_code(code: str, public_base_url: str) -> None:
+    """Print the code once, to stderr so it lands in the container logs.
+
+    This is the one moment the plaintext exists outside the operator's head,
+    and it is a real trade: a code in a log file is less protected than a hash
+    in a file only root reads. It buys a deployment that starts without any
+    credential having to be generated, quoted and pasted first.
+    """
+    print(
+        "\n"
+        "  ---------------------------------------------------------------\n"
+        "  No AUTH_PASSWORD_HASH is set, so this server issued itself a\n"
+        "  pairing code. Use it as the password when Claude sends you to\n"
+        "  the login page.\n"
+        "\n"
+        f"      pairing code:   {code}\n"
+        f"      connector URL:  {public_base_url}/mcp\n"
+        "\n"
+        "  Printed once; only its hash is stored. `canvas-probe\n"
+        "  reset-pairing` then a restart issues a new one. Setting\n"
+        "  AUTH_PASSWORD_HASH replaces it and revokes this code.\n"
+        "  ---------------------------------------------------------------\n",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 class SingleUserOAuthProvider(OAuthProvider):
@@ -65,12 +114,34 @@ class SingleUserOAuthProvider(OAuthProvider):
         self.auth_config = auth_config
         self.store = OAuthStore(auth_config.db_path)
         self.store.purge_expired()
+        self._password_hash = self._resolve_credential()
 
     # ---- password ------------------------------------------------------------
 
+    def _resolve_credential(self) -> str:
+        """The one argon2 hash this server will accept.
+
+        A configured hash wins outright rather than being accepted alongside a
+        stored pairing code: otherwise a code printed to the logs months ago
+        would keep working after a password was set, and setting one would not
+        be a way to revoke it.
+        """
+        if self.auth_config.password_hash:
+            return self.auth_config.password_hash
+
+        stored = self.store.get_server_secret(PAIRING_SECRET_NAME)
+        if stored is not None:
+            return stored
+
+        code = generate_pairing_code()
+        digest = hash_password(code)
+        self.store.put_server_secret(PAIRING_SECRET_NAME, digest)
+        _announce_pairing_code(code, self.auth_config.public_base_url)
+        return digest
+
     def verify_password(self, password: str) -> bool:
         try:
-            _hasher.verify(self.auth_config.password_hash, password)
+            _hasher.verify(self._password_hash, password)
         except (VerifyMismatchError, VerificationError):
             return False
         return True
