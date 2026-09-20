@@ -79,9 +79,13 @@ of knowing it because they typed it.
 
 ## After deploying
 
-Railway assigns a domain only when asked. In the service's Settings →
-Networking, choose **Generate Domain**; the connector URL is that domain with
-`/mcp` on the end.
+Railway assigns the service a public domain as part of deploying a template,
+so the person installing does not have to configure networking. The connector
+URL is that domain with `/mcp` on the end. Should a deploy come up without
+one, Settings → Networking → **Generate Domain** produces it.
+
+Check this when you first publish the template: the whole install depends on
+the deployer being handed a URL without going looking for one.
 
 ## Publishing
 
