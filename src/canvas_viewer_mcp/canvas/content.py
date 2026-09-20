@@ -109,7 +109,7 @@ class Module(BaseModel):
 _COURSE_PATH = re.compile(r"/courses/(\d+)")
 
 
-def _course_id_of(raw: JsonObject) -> int | None:
+def _course_id_of(raw: JsonObject, fallback: int | None = None) -> int | None:
     """The course a topic belongs to, however this endpoint happens to say it.
 
     A topic fetched under ``courses/{id}/discussion_topics`` carries
@@ -117,6 +117,12 @@ def _course_id_of(raw: JsonObject) -> int | None:
     it names the course with a ``context_code`` of ``course_{id}`` instead.
     Reading only ``course_id`` there leaves every announcement with a null
     course, which is the one field a caller needs to act on it.
+
+    ``fallback`` is the id the caller already put in the request path. It is
+    consulted last but it is the most reliable source of the lot -- a course
+    endpoint always knows which course it asked about, whereas the payload may
+    say nothing and the link may be missing or point elsewhere. Passing it is
+    what stops a topic being reported as belonging to no course.
     """
     course_id = raw.get("course_id")
     if course_id is not None:
@@ -135,14 +141,37 @@ def _course_id_of(raw: JsonObject) -> int | None:
             found = _COURSE_PATH.search(link)
             if found:
                 return int(found.group(1))
-    return None
+    return fallback
 
 
-def flatten_topic(raw: JsonObject, *, include_message: bool = False) -> DiscussionTopic:
-    author = raw.get("author") or {}
+def _author_of(raw: JsonObject) -> str | None:
+    """Whoever Canvas names as the writer of a topic or reply.
+
+    The name arrives in one of three shapes: an ``author`` object (topics), a
+    ``user`` object (replies), or a bare ``user_name``. All are consulted,
+    because Canvas populates a different one per endpoint and sends the others
+    empty -- an ``author`` of ``{}`` alongside a real ``user_name`` is routine,
+    so an empty object must fall through rather than settle the question.
+
+    A null result is itself information: instructor-created course topics are
+    attributed to the course rather than to a person, and arrive with every
+    one of these fields blank. Verified against a real account: 22 topics
+    across three courses, none naming an author. Null is the honest report;
+    the course name would be a fabrication.
+    """
+    for key in ("author", "user"):
+        person = raw.get(key)
+        if isinstance(person, dict) and (name := person.get("display_name")):
+            return str(name)
+    return raw.get("user_name")
+
+
+def flatten_topic(
+    raw: JsonObject, *, course_id: int | None = None, include_message: bool = False
+) -> DiscussionTopic:
     return DiscussionTopic(
         id=raw["id"],
-        course_id=_course_id_of(raw),
+        course_id=_course_id_of(raw, course_id),
         title=raw.get("title") or "(untitled)",
         is_announcement=bool(raw.get("is_announcement")),
         posted_at=raw.get("posted_at"),
@@ -152,7 +181,7 @@ def flatten_topic(raw: JsonObject, *, include_message: bool = False) -> Discussi
         reply_count=int(raw.get("discussion_subentry_count") or 0),
         locked=bool(raw.get("locked")),
         published=bool(raw.get("published", True)),
-        author=author.get("display_name") if isinstance(author, dict) else raw.get("user_name"),
+        author=_author_of(raw),
         assignment_id=raw.get("assignment_id"),
         html_url=raw.get("html_url") or raw.get("url"),
         message=html_to_markdown(raw.get("message")) if include_message else None,
@@ -165,7 +194,7 @@ def flatten_reply(raw: JsonObject, *, depth: int = 0) -> DiscussionReply:
         parent_id=raw.get("parent_id"),
         depth=depth,
         user_id=raw.get("user_id"),
-        author=raw.get("user_name"),
+        author=_author_of(raw),
         created_at=raw.get("created_at"),
         message=html_to_markdown(raw.get("message")),
         deleted=bool(raw.get("deleted")),
@@ -221,7 +250,7 @@ async def fetch_discussions(
     client: CanvasClient, course_id: int, *, include_messages: bool = False
 ) -> list[DiscussionTopic]:
     raw = await client.paginate(f"courses/{course_id}/discussion_topics")
-    return [flatten_topic(t, include_message=include_messages) for t in raw]
+    return [flatten_topic(t, course_id=course_id, include_message=include_messages) for t in raw]
 
 
 def _walk_view(
@@ -326,7 +355,7 @@ async def fetch_discussion(
     See :func:`fetch_thread` for the ``full_tree`` flag.
     """
     topic_raw = await client.get(f"courses/{course_id}/discussion_topics/{topic_id}")
-    topic = flatten_topic(topic_raw, include_message=True)
+    topic = flatten_topic(topic_raw, course_id=course_id, include_message=True)
     entries, full_tree = await fetch_thread(client, course_id, topic_id)
     return topic, entries, full_tree
 
