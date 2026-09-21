@@ -100,6 +100,30 @@ image's own `ENV PORT=8000` is what takes effect.
 Check the result in the serialized config -- a service configured for this has
 a `networking` section; one that will fail has none.
 
+### Set the target port explicitly, and check it after the first deploy
+
+Railway detects the target port by looking at what the application is
+listening on when the domain is first generated. That detection is worthless
+in the one case that matters here: a first deploy that failed for any reason
+was not listening, so there was nothing to detect, and the domain is left
+pointing at a port the container never binds.
+
+The symptom is a service that looks completely healthy while every request
+through the domain returns Railway's own 502 page:
+
+    {"status":"error","code":502,"message":"Application failed to respond"}
+
+That is the edge saying it cannot reach the container, not the container
+saying anything. `/health` returns it too, so there is no endpoint that
+behaves differently and nothing in the application logs at all.
+
+The fix is Settings -> Networking -> the edit icon beside the domain -> target
+port `8000`. Deleting and regenerating the domain also works once the app is
+genuinely up, because detection then has something to find.
+
+Worth re-checking whenever a first deploy failed and was later fixed, which is
+exactly the sequence that produces it.
+
 From v0.2.1 the server no longer crash-loops when the variable is absent. It
 starts, serves `/health` with `"status": "awaiting_public_url"`, and refuses
 `/mcp` and the OAuth routes with 503 until a domain exists. That turns an
