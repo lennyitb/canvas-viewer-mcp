@@ -42,7 +42,9 @@ server, running in a container. See [PLAN.md](PLAN.md) for how it was built.
 ## Install
 
 Three steps: run your own copy of the server, connect Claude to it, add the
-skills. Fifteen minutes, and nothing after step 1 involves a terminal.
+skills. Fifteen minutes, and nothing after step 1 involves a terminal — step 1
+need not either, whether you use the Railway button or ask Claude to deploy it
+on a machine of your own.
 
 **Every install is its own instance.** You deploy your own container, holding
 your own Canvas token, at your own address, with its own login. There is no
@@ -83,12 +85,36 @@ wrong one, and every request then returns Railway's own 502 page.
 Railway is about $5/month. [docs/railway-template.md](docs/railway-template.md)
 records exactly what the button deploys.
 
-**Your own server.** If you already run things behind a reverse proxy,
-[DEPLOY.md](DEPLOY.md) has the `docker compose` path. Same container, same
-three values, in a `.env` file.
+**Your own machine, with Claude doing the work.** If you have a box — a VPS, a
+home server, a Raspberry Pi — you can hand the install to an assistant that has
+a shell on it:
 
-**On your own machine.** If you use Claude Code or another client that can
-launch a local process, you can skip hosting entirely and run the server over
+> **claude please deploy this server on this machine**
+> **https://github.com/lennyitb/canvas-viewer-mcp**
+
+[DEPLOY.md](DEPLOY.md) is written for that: it tells the assistant how to choose
+between automatic HTTPS, a reverse proxy you already run, and a Cloudflare
+tunnel for a machine with no public IP, and how to drive the setup script.
+
+Your Canvas token does not pass through the assistant. The script collects it
+from *your* terminal with echo off, checks it against Canvas before writing it,
+and leaves it in a file the container mounts — never in a command line, never in
+the assistant's context.
+
+**Your own machine, typing it yourself.** The same script, run directly:
+
+```bash
+git clone https://github.com/lennyitb/canvas-viewer-mcp
+cd canvas-viewer-mcp && ./scripts/setup.sh
+```
+
+Four or five questions — how the server should be reachable, your Canvas
+address, your token, a password — and it writes the configuration, starts the
+container, and prints the connector URL. DEPLOY.md has the by-hand version if
+you would rather see every file it writes.
+
+**No server at all — over stdio.** If you use Claude Code or another client that
+can launch a local process, you can skip hosting entirely and run the server over
 stdio — no OAuth, no public address, no monthly bill, and it only runs while
 you're using it. It won't reach claude.ai in a browser or the phone apps.
 
@@ -115,11 +141,13 @@ Skip this if you're running over stdio; your client already has it.
 On **claude.ai** in a browser — not the mobile apps, which can't add new
 connectors:
 
-**Settings → Connectors → Add custom connector**, and paste your
-`https://.../mcp` URL.
+**Settings → Connectors → Add custom connector**, and paste the URL the deploy
+gave you, with no path on the end. (`/mcp` also works, for connectors added
+before v0.3.0.)
 
 Claude registers itself and sends you to a login page. Enter the password you
-chose. Once it's authorized, the iOS and Android apps pick it up on their own.
+chose — or, if you let the server issue a pairing code instead, the code it
+printed to its log. Once it's authorized, the iOS and Android apps pick it up on their own.
 
 ### 3. Install the skills
 
