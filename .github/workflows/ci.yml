@@ -32,3 +32,83 @@ jobs:
       - run: ruff check .
       - run: mypy
       - run: pytest -q
+
+      # setup.sh is the documented install path, so a bug in it is a bug in
+      # the product. shellcheck catches the class that matters most here:
+      # a bare `test && action` that aborts the whole script under `set -e`
+      # the moment the test is false.
+      - name: shellcheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck scripts/setup.sh docker-entrypoint.sh
+
+  image:
+    name: Build and smoke-test the image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built here rather than only on a release tag. Both entrypoint bugs
+      # this project has shipped -- a bind-mounted /data arriving owned by
+      # root, and a token file the app user could not read -- were invisible
+      # to pytest and only appeared on a real deploy. This is the cheapest
+      # place to find the next one.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: canvas-viewer-mcp:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start it the way a deployment does
+        run: |
+          # Root-owned, exactly as a bind-mounted volume and a prepared secret
+          # arrive on a real host. The container has to fix both up itself.
+          sudo mkdir -p /tmp/cv-data
+          sudo install -m 600 /dev/null /tmp/cv-token
+          echo 'not-a-real-token' | sudo tee /tmp/cv-token >/dev/null
+          docker run -d --name cv \
+            -p 127.0.0.1:8000:8000 \
+            -v /tmp/cv-data:/data \
+            -v /tmp/cv-token:/run/secrets/canvas_token:ro \
+            -e CANVAS_BASE_URL=https://example.instructure.com \
+            -e PUBLIC_BASE_URL=https://canvas-viewer-mcp.example.com \
+            canvas-viewer-mcp:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+      - name: It is up, and it is shut
+        run: |
+          set -x
+          curl -fsS http://127.0.0.1:8000/health | grep -q '"status":"ok"'
+
+          # Anonymous callers get nothing, at either path.
+          for path in / /mcp; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:8000$path" \
+              -H 'Accept: application/json, text/event-stream' \
+              -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+            [ "$code" = 401 ] || { echo "POST $path returned $code, expected 401"; exit 1; }
+          done
+
+          # Every advertised URL has to be the public one. A local or http://
+          # address here is what makes Claude refuse the connector.
+          curl -fsS http://127.0.0.1:8000/.well-known/oauth-authorization-server \
+            | tee /dev/stderr | grep -q '"issuer":"https://canvas-viewer-mcp.example.com'
+
+          # The entrypoint's two fixups: the database exists on the root-owned
+          # bind mount, and nothing application-level is running as root.
+          sudo test -f /tmp/cv-data/auth.sqlite
+          # By uid, not name: 10001 has no passwd entry on the host, so a
+          # name comparison would pass for the wrong reason.
+          [ "$(sudo stat -c '%u' /tmp/cv-data/auth.sqlite)" = 10001 ]
+
+      - name: Logs, when any of that failed
+        if: failure()
+        run: docker logs cv
