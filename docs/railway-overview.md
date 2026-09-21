@@ -1,11 +1,11 @@
-# Deploy and Host Canvas Viewer for Claude on Railway
+# Deploy and Host Canvas Viewer with Railway
 
 Canvas Viewer is a read-only bridge between a Canvas LMS account and Claude.
 It exposes coursework, grades, files, discussions, announcements and modules
 as tools Claude can call, so a student can ask what is actually due instead of
 clicking through every course and pasting the answer into a chat window.
 
-## About Hosting Canvas Viewer for Claude
+## About Hosting Canvas Viewer
 
 This template runs one small container and nothing else. State is a single
 SQLite file on a persistent volume, so there is no database to provision or
@@ -82,7 +82,7 @@ not disabled, absent. It cannot submit work, post to a discussion, or alter a
 Canvas account. Revoking the token in Canvas cuts access immediately and
 independently of anything running here.
 
-### Why Deploy Canvas Viewer for Claude on Railway?
+### Why Deploy Canvas Viewer on Railway?
 
 A connector has to be reachable from Anthropic's servers over HTTPS, which
 normally means a domain, a TLS certificate, a reverse proxy and somewhere for

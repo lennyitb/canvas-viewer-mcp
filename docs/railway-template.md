@@ -120,6 +120,17 @@ things that have to stay true of the code -- that `PUBLIC_BASE_URL` is derived
 rather than asked for, that the volume belongs at `/data`, that there are no
 write paths -- and those claims should be reviewed when the code changes.
 
+Railway's checker matches the headings literally, and its scaffold is not
+symmetrical: the H1 reads "Deploy and Host [X] **with** Railway" while the
+closing H3 reads "Why Deploy [X] **on** Railway?". The substituted name has to
+be the same string in all four headings that take one -- here `Canvas Viewer`,
+which is therefore also what the template itself should be named. Heading
+levels are part of the match: H1, H2, H2, H2, H3, H3, H3, in that order.
+
+The literal scaffold is at
+<https://docs.railway.com/templates/best-practices.md>; the rendered HTML page
+paraphrases it and drops the with/on distinction.
+
 ### Still to fill in
 
 The template deploys correctly, but three descriptions are empty, and they are
