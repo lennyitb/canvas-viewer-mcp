@@ -84,11 +84,21 @@ it does not, Railway sets no `RAILWAY_PUBLIC_DOMAIN`, the server has no
 hostname to build its OAuth metadata from, and the first deploy of this
 template failed for exactly that reason.
 
-So the template must request a domain itself: give the service a **public
-network** entry with target port `8000`, which is what makes Railway assign
-the domain at deploy time and set the variable before the container starts.
-Check it in the serialized config -- a service configured for this has a
-`networking` section; one that will fail has none.
+So the template must request a domain itself. In the composer's networking
+settings, choose **HTTP Proxy** and give it target port **8000**.
+
+Not TCP Proxy. That publishes a raw `proxy.rlwy.net:<port>` address rather
+than an HTTPS domain, and it sets `RAILWAY_TCP_PROXY_DOMAIN` and
+`RAILWAY_TCP_PROXY_PORT` instead of `RAILWAY_PUBLIC_DOMAIN` -- so the server
+would still have no hostname, and a connector cannot be added over plain TCP
+anyway.
+
+Port 8000 because that is what the container listens on: Railway does not
+inject a `PORT` variable (its provided variables are all `RAILWAY_*`), so the
+image's own `ENV PORT=8000` is what takes effect.
+
+Check the result in the serialized config -- a service configured for this has
+a `networking` section; one that will fail has none.
 
 From v0.2.1 the server no longer crash-loops when the variable is absent. It
 starts, serves `/health` with `"status": "awaiting_public_url"`, and refuses
