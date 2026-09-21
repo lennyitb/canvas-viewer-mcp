@@ -37,6 +37,12 @@ cp ~/.config/canvas-viewer-mcp/token /srv/canvas-viewer-mcp/secrets/canvas_token
 chmod 600 /srv/canvas-viewer-mcp/secrets/canvas_token
 ```
 
+Leave it owned by root. The server runs as an unprivileged user inside the
+container and cannot read a root-owned `600` file, so the entrypoint copies it
+at start to a private path that user owns, still `600` and still a file rather
+than an environment variable. Before v0.2.2 this combination failed outright
+with `permission denied`.
+
 There is no second secret to prepare. The connector login is gated by a pairing
 code the server issues itself on first run and prints once to its logs; step 4
 picks it up. To choose your own instead, set one of these in step 3:

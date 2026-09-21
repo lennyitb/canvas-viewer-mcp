@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir .
 # ---- runtime ----------------------------------------------------------------
 FROM python:3.11-slim AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update && apt-get install -y --no-install-recommends curl gosu \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin canvas
 
@@ -39,11 +39,18 @@ ENV PATH="/opt/venv/bin:$PATH" \
 RUN mkdir -p /data && chown canvas:canvas /data
 VOLUME ["/data"]
 
-USER canvas
+# Deliberately no USER: the entrypoint needs root to take ownership of a
+# bind-mounted volume, which arrives owned by root however the image was
+# built, and then drops to `canvas` before exec'ing the server. Nothing
+# application-level ever runs as root.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 8000
 
 # Probes liveness only; see the health route for why it does not touch Canvas.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
 
-ENTRYPOINT ["canvas-viewer-mcp"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["canvas-viewer-mcp"]
