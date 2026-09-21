@@ -146,8 +146,10 @@ and the restart that follows generating a domain comes up configured. It is a
 safety net, not a substitute for configuring the template properly: until a
 domain exists the connector cannot be added at all.
 
-The connector URL is that domain with `/mcp` on the end. Should a deploy still
-come up without one, Settings → Networking → **Generate Domain** produces it.
+The connector URL is that domain, with no path on the end -- from v0.3.0 the
+MCP endpoint is served at the root, and `/mcp` still answers for connectors
+added before then. Should a deploy still come up without a domain, Settings →
+Networking → **Generate Domain** produces it.
 
 Check this when you first publish the template: the whole install depends on
 the deployer being handed a URL without going looking for one.

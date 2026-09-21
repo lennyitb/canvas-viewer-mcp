@@ -91,7 +91,7 @@ def _announce_pairing_code(code: str, public_base_url: str) -> None:
         "  the login page.\n"
         "\n"
         f"      pairing code:   {code}\n"
-        f"      connector URL:  {public_base_url}/mcp\n"
+        f"      connector URL:  {public_base_url}\n"
         "\n"
         "  Printed once; only its hash is stored. `canvas-probe\n"
         "  reset-pairing` then a restart issues a new one. Setting\n"
