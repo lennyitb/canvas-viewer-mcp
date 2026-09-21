@@ -40,7 +40,13 @@ jobs:
       - name: shellcheck
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck scripts/setup.sh docker-entrypoint.sh
+          shellcheck scripts/setup.sh docker-entrypoint.sh tests/test_setup_sh.sh
+
+      # shellcheck reads the script but never runs it, so it cannot see an
+      # answer that a re-run fails to carry forward. This does: it prepares a
+      # directory twice and checks what .env still says the second time.
+      - name: setup.sh keeps its answers across a re-run
+        run: tests/test_setup_sh.sh
 
   image:
     name: Build and smoke-test the image
