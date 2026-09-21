@@ -227,6 +227,14 @@ ask CANVAS_URL "Your school's Canvas address" "${CANVAS_URL:-$(old CANVAS_BASE_U
 [ "${CANVAS_URL#http}" != "$CANVAS_URL" ] || CANVAS_URL="https://$CANVAS_URL"
 CANVAS_URL=$(printf '%s' "$CANVAS_URL" | sed -E 's#^(https?://[^/]+).*#\1#')
 
+# The port is an answer like any other, so a re-run keeps the one already in
+# .env unless --port overrides it. Without this the 8000 default below wins,
+# and re-running to change one unrelated thing silently moves the deployment
+# back to 8000 -- on the machine where something else already holds that port,
+# which is the whole reason it was moved, compose then refuses to start with
+# "Bind for 127.0.0.1:8000 failed: port is already allocated".
+PORT=${PORT:-$(old BIND_PORT)}
+
 case "$MODE" in
     tls|proxy)
         ask PUBLIC_URL "The public HTTPS URL Claude will reach this server on" \
