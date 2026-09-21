@@ -55,7 +55,7 @@ coursework.
 **The easy way — Railway.** One click, three fields, about three minutes.
 Railway runs the container, gives it an HTTPS address, and keeps it on.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/1cOY5u?referralCode=fkprGJ&utm_medium=integration&utm_source=template&utm_campaign=generic)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/canvas-viewer-mcp-server?referralCode=fkprGJ&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 It asks for three things:
 

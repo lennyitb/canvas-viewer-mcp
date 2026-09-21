@@ -158,15 +158,21 @@ Create it under Workspace Settings → Templates → New Template, fill in the
 above, then copy the template URL from the composer and put it in the README
 button.
 
-The published template is **`https://railway.com/deploy/1cOY5u`**. Its
-configuration can be read back without logging in, which is the quickest way
-to check an edit actually took:
+The published template is
+**`https://railway.com/deploy/canvas-viewer-mcp-server`**.
+
+The code in that URL is derived from the template's *name*, so renaming the
+template changes the URL and 404s the old one. The README button broke exactly
+that way once. Re-check it after any rename.
+
+Its configuration can be read back without logging in, which is the quickest
+way to confirm an edit actually took:
 
 ```bash
 curl -s -X POST https://backboard.railway.com/graphql/v2 \
   -H 'Content-Type: application/json' \
   -d '{"query":"query($code:String!){template(code:$code){name description serializedConfig}}",
-       "variables":{"code":"1cOY5u"}}' | python3 -m json.tool
+       "variables":{"code":"canvas-viewer-mcp-server"}}' | python3 -m json.tool
 ```
 
 The share URL carries a `referralCode`. That is Railway's default and it
@@ -196,18 +202,19 @@ The literal scaffold is at
 <https://docs.railway.com/templates/best-practices.md>; the rendered HTML page
 paraphrases it and drops the with/on distinction.
 
-### Still to fill in
+### Outstanding: the declared target port
 
-The template deploys correctly, but three descriptions are empty, and they are
-the part the design actually rests on. With no wizard, the deploy form *is*
-the documentation: someone who has never opened a terminal sees three blank
-boxes named `CANVAS_BASE_URL`, `CANVAS_TOKEN` and `AUTH_PASSWORD` and has
-nothing telling them what belongs in any of them. The text to paste is under
-**Variables** above.
+The template declares `serviceDomains` port **8000**, and the container listens
+on **8080**, because Railway injects `PORT` and it overrides the Dockerfile's
+`ENV PORT=8000`. A deploy from this template therefore comes up healthy and
+returns Railway's 502 page on every request -- the same failure the first
+manual deploy hit, now baked into the template for everyone who uses it.
 
-Also unset: the template's own name, which Railway generated as `warm-wild`,
-and its description. Both are what a stranger sees before deciding to trust it
-with a Canvas token.
+It needs to be 8080, matching the service that is known to work. Read it back
+with the query above and confirm `{'port': 8080}` before trusting the button.
+
+The rest is done: the name, the description, and all three variable
+descriptions are filled in.
 
 ## Checking it still works
 
@@ -217,9 +224,11 @@ Deploy the template into a throwaway project and confirm, in order:
 2. `https://<domain>/.well-known/oauth-authorization-server` lists URLs that
    all begin with `https://<domain>` — never `http://`, never a local address.
    This is the check that `RAILWAY_PUBLIC_DOMAIN` was picked up.
-3. An unauthenticated `POST /mcp` returns 401.
-4. Adding `https://<domain>/mcp` in claude.ai reaches the login page, the
-   chosen password works, and `list_courses` returns real courses.
+3. An unauthenticated `POST /` returns 401 — not 404, and not Railway's 502
+   page, which is the target-port symptom.
+4. Adding `https://<domain>` in claude.ai, with no path on the end, reaches
+   the login page; the chosen password works and `list_courses` returns real
+   courses.
 5. Redeploying does not send you back to the login page — that proves the
    volume is attached.
 
