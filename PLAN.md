@@ -159,13 +159,42 @@ Two of the four required values were removed rather than explained:
 - [x] `v0.2.0` tagged; image rebuilt with the platform-aware configuration
 - [x] Skills packaged as uploadable zips and attached to the release
 - [x] [docs/railway-template.md](docs/railway-template.md) written
-- [ ] Railway template created and its URL put in the README button
+- [x] Railway template created and its URL put in the README button
 - [ ] Template deployed into a throwaway project and walked end to end
 
 The check that matters on that last one is the OAuth metadata: every URL it
 advertises must begin with the deploy's own domain. That is the proof the
 platform hostname was picked up, and getting it wrong is the failure that
 sends someone else's Claude to authorize against the wrong server.
+
+## Stage 8 — Install on a machine you own
+
+Stage 7 removed the terminal for people who have nowhere to run a container.
+This stage is for the ones who do, and the honest state of it was that
+DEPLOY.md named its own audience as someone already running a box behind a
+proxy. Everything else -- DNS, TLS, a proxy vhost with the right buffering,
+a root-owned secrets file -- was left to the reader.
+
+The path taken is not a shorter document. It is that the person asks an
+assistant with a shell on the machine to do it, so DEPLOY.md is written for
+that reader first, and the parts an assistant must not do are the parts the
+setup script collects from a terminal instead.
+
+- [x] `compose.yaml` gains `--profile tls` (Caddy, automatic certificates) and
+      `--profile tunnel` (cloudflared, for a machine with no public IP)
+- [x] `scripts/setup.sh`: interactive at a terminal, and for an assistant, a
+      prepare-and-hand-over that never touches the Canvas token
+- [x] The token checked against Canvas before it is written, rather than
+      failing later as every tool call
+- [x] DEPLOY.md reordered around the assistant, by-hand instructions kept
+- [x] CI builds the image and starts it against a root-owned volume and secret
+- [ ] `v0.4.0` tagged and the image published
+- [ ] A real deploy on a real machine, by asking for one, start to finish
+
+That last box is the only one that proves anything. Everything above it was
+tested against the components -- the built image, all three compose profiles,
+both halves of the script -- but no run has yet gone from "deploy this on this
+machine" to a connector answering in claude.ai.
 
 ## Running concern — response size
 Tool results consume model context and mobile latency. List tools return
