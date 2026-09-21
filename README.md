@@ -72,7 +72,7 @@ Whichever you choose, have these ready:
 - **Your Canvas address.** Open Canvas and copy what's in the address bar, for
   example `https://yourschool.instructure.com`.
 - **A Canvas access token.** In Canvas, go to **Account → Settings → Approved
-  Integrations → + New Access Token**. Leave the expiry date blank. Copy the
+  Integrations → + New Access Token**. Set the expiry date; it can be up to 90 days, this is a fine choice. Copy the
   token right away, because Canvas only shows it once. Treat it like a
   password.
 - **A password you make up** (options A and B), at least 12 characters. Claude
@@ -83,7 +83,7 @@ Whichever you choose, have these ready:
 #### Option A: Self-hosted
 
 You need a machine that stays on and has [Docker](https://docs.docker.com/get-docker/)
-installed
+installed.
 
 **Let Claude do it.** If you have Claude Code (or a similar assistant) running
 on that machine, tell it:
