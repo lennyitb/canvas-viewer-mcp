@@ -77,12 +77,29 @@ one, set the `AUTH_PASSWORD` default to `${{ secret(24) }}`. The trade is that
 the student then has to open the service's Variables tab to read it, instead
 of knowing it because they typed it.
 
-## After deploying
+## The domain is not optional, and not automatic
 
-Railway assigns the service a public domain as part of deploying a template,
-so the person installing does not have to configure networking. The connector
-URL is that domain with `/mcp` on the end. Should a deploy come up without
-one, Settings → Networking → **Generate Domain** produces it.
+A template deploy does **not** necessarily come up with a public domain. When
+it does not, Railway sets no `RAILWAY_PUBLIC_DOMAIN`, the server has no
+hostname to build its OAuth metadata from, and the first deploy of this
+template failed for exactly that reason.
+
+So the template must request a domain itself: give the service a **public
+network** entry with target port `8000`, which is what makes Railway assign
+the domain at deploy time and set the variable before the container starts.
+Check it in the serialized config -- a service configured for this has a
+`networking` section; one that will fail has none.
+
+From v0.2.1 the server no longer crash-loops when the variable is absent. It
+starts, serves `/health` with `"status": "awaiting_public_url"`, and refuses
+`/mcp` and the OAuth routes with 503 until a domain exists. That turns an
+unrecoverable deploy into one that reports healthy and says what it needs,
+and the restart that follows generating a domain comes up configured. It is a
+safety net, not a substitute for configuring the template properly: until a
+domain exists the connector cannot be added at all.
+
+The connector URL is that domain with `/mcp` on the end. Should a deploy still
+come up without one, Settings → Networking → **Generate Domain** produces it.
 
 Check this when you first publish the template: the whole install depends on
 the deployer being handed a URL without going looking for one.

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -613,12 +614,72 @@ def main() -> None:
     if transport not in ("http", "streamable-http"):
         raise SystemExit(f"Unsupported MCP_TRANSPORT {transport!r}; use 'stdio' or 'http'.")
 
-    enable_http_auth()
-    mcp.run(
-        transport="http",
-        host=os.environ.get("HOST", "0.0.0.0"),
-        port=int(os.environ.get("PORT", "8000")),
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8000"))
+
+    from .config import ConfigError
+
+    try:
+        enable_http_auth()
+    except ConfigError as exc:
+        # Almost always: the platform has not assigned this service a domain
+        # yet, so there is no hostname to build OAuth metadata from. Exiting
+        # here produced a crash loop, and a crash loop is the worst possible
+        # state to be in -- the deploy never reports healthy, which is exactly
+        # when a platform is least willing to hand out the domain that would
+        # have fixed it. Serve health instead and refuse everything else, so
+        # the deploy settles, the domain can be assigned, and the restart that
+        # follows comes up properly configured.
+        _run_unconfigured(str(exc), host, port)
+        return
+
+    mcp.run(transport="http", host=host, port=port)
+
+
+def _run_unconfigured(reason: str, host: str, port: int) -> None:
+    """Serve only a health check, and say why, until configuration arrives.
+
+    Deliberately serves no MCP endpoint and no OAuth endpoint: without a
+    public URL there is no safe way to run either, and a server that answered
+    anyway would be advertising metadata pointing at the wrong host.
+    """
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+
+    banner = (
+        "\n"
+        "  ---------------------------------------------------------------\n"
+        "  canvas-viewer-mcp is running but not yet reachable.\n"
+        "\n"
+        f"  {reason}\n"
+        "\n"
+        "  On Railway, Render or Fly this normally means the service has\n"
+        "  no public domain yet. Generate one -- on Railway that is\n"
+        "  Settings -> Networking -> Generate Domain -- and the service\n"
+        "  will restart and pick it up. Nothing else needs changing.\n"
+        "  ---------------------------------------------------------------\n"
     )
+    print(banner, file=sys.stderr, flush=True)
+
+    async def health(request: Request) -> Response:
+        # 200 so the platform marks the deploy healthy and will assign a
+        # domain; the body is honest about the state rather than claiming ok.
+        return JSONResponse(
+            {"status": "awaiting_public_url", "version": __version__, "reason": reason},
+            status_code=200,
+        )
+
+    async def unavailable(request: Request) -> Response:
+        return JSONResponse({"error": "not_configured", "reason": reason}, status_code=503)
+
+    app = Starlette(
+        routes=[
+            Route("/health", health),
+            Route("/{path:path}", unavailable, methods=["GET", "POST", "PUT", "DELETE", "PATCH"]),
+        ]
+    )
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

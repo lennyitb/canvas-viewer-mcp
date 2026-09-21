@@ -231,9 +231,9 @@ async def test_announcement_bodies_can_be_left_out() -> None:
 
     assert "due Friday" in full["announcements"][0]["message"]
     assert "message" not in lean["announcements"][0]
-    assert full["announcements"][0]["course_id"] == 1, (
-        "the announcements endpoint names the course with context_code, not course_id"
-    )
+    assert (
+        full["announcements"][0]["course_id"] == 1
+    ), "the announcements endpoint names the course with context_code, not course_id"
     codes = route.calls.last.request.url.params.get_list("context_codes[]")
     assert codes == ["course_2"], "course_id narrows the sweep to that course"
     assert one["count"] == 1
@@ -300,3 +300,51 @@ def test_topic_course_id_survives_every_shape_canvas_sends() -> None:
         == 7
     )
     assert flatten_topic(row).course_id is None
+
+
+# ---- starting before the platform has assigned a domain ----------------------
+
+
+def test_http_start_without_a_public_url_serves_health_instead_of_exiting(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Exiting here produced a crash loop on Railway, which is the worst state
+    to be in: the deploy never reports healthy, and that is exactly when a
+    platform is least willing to hand out the domain that would have fixed
+    it. Serve health and refuse everything else instead."""
+    served: dict[str, Any] = {}
+    monkeypatch.setattr(
+        server,
+        "_run_unconfigured",
+        lambda reason, host, port: served.update(reason=reason, host=host, port=port),
+    )
+    monkeypatch.setattr(server.mcp, "run", lambda **kw: served.update(ran_mcp=True))
+
+    monkeypatch.setenv("CANVAS_CONFIG_FILE", str(tmp_path / "absent.toml"))
+    monkeypatch.setenv("MCP_TRANSPORT", "http")
+    monkeypatch.setenv("CANVAS_BASE_URL", "https://x.instructure.com")
+    monkeypatch.setenv("CANVAS_TOKEN", "9112~token")
+    monkeypatch.setenv("PORT", "8123")
+    for name in ("PUBLIC_BASE_URL", "RAILWAY_PUBLIC_DOMAIN", "RENDER_EXTERNAL_URL", "FLY_APP_NAME"):
+        monkeypatch.delenv(name, raising=False)
+
+    server.main()
+
+    assert "ran_mcp" not in served, "the MCP endpoint must not be served without a public URL"
+    assert "PUBLIC_BASE_URL" in served["reason"]
+    assert served["port"] == 8123
+
+
+def test_canvas_misconfiguration_still_exits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The degraded mode is only for a missing public URL, which arrives by
+    itself once a domain is assigned. A bad Canvas host never fixes itself, so
+    it must still fail the deploy loudly."""
+    monkeypatch.setenv("CANVAS_CONFIG_FILE", str(tmp_path / "absent.toml"))
+    monkeypatch.setenv("MCP_TRANSPORT", "http")
+    monkeypatch.delenv("CANVAS_BASE_URL", raising=False)
+    monkeypatch.setenv("CANVAS_TOKEN", "9112~token")
+
+    with pytest.raises(SystemExit):
+        server.main()
