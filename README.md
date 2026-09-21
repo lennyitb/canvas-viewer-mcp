@@ -30,6 +30,8 @@ Things you can ask once it's set up:
 - "Am I caught up in all my classes?"
 - "Do I still owe any discussion replies?"
 - "What did my instructors announce this week?"
+- "Please help me develop a reply to Chris in the Week 4 history discussion"
+- "Please fetch today's chemistry lab, put a copy in my folder, and summarize the procedure"
 
 ## Is it safe?
 
