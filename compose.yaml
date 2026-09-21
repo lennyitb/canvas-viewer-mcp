@@ -1,11 +1,24 @@
 # canvas-viewer-mcp
 #
-# Binds to localhost only. Your public hostname is served by a reverse proxy,
-# which terminates TLS and forwards here; publishing this port on 0.0.0.0 would
-# expose the MCP endpoint without that TLS layer.
+# Three ways to run this, selected by compose profile:
 #
-# Every deployment-specific value comes from .env -- see DEPLOY.md. Nothing in
-# this file is specific to one school or one domain.
+#   docker compose up -d                      you already run a reverse proxy.
+#                                             Binds 127.0.0.1:8000; point your
+#                                             vhost at it. See DEPLOY.md step 5.
+#
+#   docker compose --profile tls up -d        no proxy yet. Caddy sits in front,
+#                                             takes ports 80 and 443, and gets a
+#                                             certificate for PUBLIC_BASE_URL on
+#                                             its own. Needs a DNS record and
+#                                             those two ports free.
+#
+#   docker compose --profile tunnel up -d     no public IP, no open ports, no
+#                                             DNS. A Cloudflare tunnel dials out
+#                                             and Cloudflare serves the HTTPS
+#                                             hostname.
+#
+# `scripts/setup.sh` writes the .env every one of these reads, and picks the
+# profile for you. Nothing here is specific to one school or one domain.
 
 services:
   canvas-viewer-mcp:
@@ -14,13 +27,30 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"
+      # Published on loopback so the MCP endpoint is never exposed without the
+      # TLS layer in front of it. Under the tls and tunnel profiles this is
+      # only useful for `curl`ing the container while debugging; the proxy
+      # reaches it over the compose network instead.
+      - "${BIND_ADDR:-127.0.0.1}:${BIND_PORT:-8000}:8000"
     environment:
       CANVAS_BASE_URL: ${CANVAS_BASE_URL:?set CANVAS_BASE_URL in .env, e.g. https://yourschool.instructure.com}
       # The public HTTPS URL Claude reaches this server on. Getting this wrong
       # points the connector's OAuth flow at whatever host it names.
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env, e.g. https://canvas-viewer-mcp.example.com}
-      # The connector login, three ways, in this order of precedence.
+      # The Canvas token, two ways.
+      #
+      # By default it is the mounted file below, which keeps it out of the
+      # process list and out of `docker inspect`. Put CANVAS_TOKEN in .env
+      # instead if you would rather not manage a file -- it wins over the
+      # mount, but the mount source still has to exist, so `touch
+      # secrets/canvas_token` first.
+      CANVAS_TOKEN: ${CANVAS_TOKEN:-}
+      # Pinned, not inherited. In .env, CANVAS_TOKEN_HOST_FILE means a path on
+      # the host; this is the path inside the container, and they are not the
+      # same thing. Pinning it here means adding `env_file: .env` to this
+      # service cannot feed a host path to the process and break startup.
+      CANVAS_TOKEN_FILE: /run/secrets/canvas_token
+      # The connector login, in this order of precedence.
       # Set none of them and the server issues itself a pairing code on first
       # run and prints it once to `docker compose logs`.
       #
@@ -51,11 +81,66 @@ services:
     tmpfs:
       - /tmp
 
+  # ---- profile: tls ----------------------------------------------------------
+  # Automatic HTTPS for people who do not already run a proxy. Caddy answers on
+  # 80 and 443, obtains and renews a certificate for the host named in
+  # PUBLIC_BASE_URL, and proxies to the container over the compose network.
+  #
+  # Caddy streams server-sent events without buffering by default, which is the
+  # setting an nginx vhost has to be told about (DEPLOY.md step 5) and the usual
+  # cause of MCP tool calls that hang.
+  caddy:
+    image: caddy:2
+    profiles: ["tls"]
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${PUBLIC_BASE_URL} --to canvas-viewer-mcp:8000
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      # Certificates and ACME account keys. Without this, every restart asks
+      # Let's Encrypt for a new certificate and will eventually be rate-limited.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - canvas-viewer-mcp
+
+  # ---- profile: tunnel -------------------------------------------------------
+  # For a machine with no public IP -- behind CGNAT, on a home connection, on a
+  # laptop. cloudflared dials out to Cloudflare, so nothing has to be
+  # port-forwarded and no DNS record is created by hand.
+  #
+  # The tunnel is created in the Cloudflare dashboard, where you also point its
+  # public hostname at http://canvas-viewer-mcp:8000. TUNNEL_TOKEN is what that
+  # page hands you; it goes in .env, and is read from the environment rather
+  # than passed on the command line so it stays out of the process list.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      # Unset is not an error here: compose interpolates every service in
+      # this file whether or not its profile is active, so a `:?` on it
+      # would break `docker compose up` for everyone not using a tunnel.
+      # cloudflared reports the missing token itself, on the one run that
+      # actually needs it.
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - canvas-viewer-mcp
+
 secrets:
   canvas_token:
     # Mounted at /run/secrets/canvas_token; the value never enters an
     # environment variable, the process list, or an image layer.
-    file: ${CANVAS_TOKEN_FILE:-./secrets/canvas_token}
+    #
+    # CANVAS_TOKEN_FILE is still honoured for deployments whose .env predates
+    # the rename, but it is the same spelling as the container-side variable
+    # and meant a different thing, so prefer CANVAS_TOKEN_HOST_FILE.
+    file: ${CANVAS_TOKEN_HOST_FILE:-${CANVAS_TOKEN_FILE:-./secrets/canvas_token}}
 
 volumes:
   canvas-viewer-mcp-data:
+  caddy-data:
+  caddy-config:
