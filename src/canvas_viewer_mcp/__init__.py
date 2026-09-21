@@ -1,3 +1,3 @@
 """Read-only MCP server for Canvas LMS."""
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"

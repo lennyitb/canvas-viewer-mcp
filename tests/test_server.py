@@ -348,3 +348,59 @@ def test_canvas_misconfiguration_still_exits(
 
     with pytest.raises(SystemExit):
         server.main()
+
+
+# ---- the endpoint people paste ----------------------------------------------
+
+
+def _http_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> set[str]:
+    """Build the HTTP app the way main() does and report its routes."""
+    import uvicorn
+    from starlette.routing import Route
+
+    monkeypatch.setenv("CANVAS_CONFIG_FILE", str(tmp_path / "absent.toml"))
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://canvas.example.com")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "auth.sqlite"))
+    monkeypatch.setenv("AUTH_PASSWORD", "a-chosen-password")
+    monkeypatch.delenv("AUTH_PASSWORD_HASH", raising=False)
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app))
+
+    server.enable_http_auth()
+    server._serve_http("127.0.0.1", 8000)
+
+    return {r.path for r in captured["app"].routes if isinstance(r, Route)}
+
+
+def test_mcp_is_served_at_the_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """The root is what people paste. An address that silently needs /mcp
+    glued on answers 404, which Claude reports as not being able to work out
+    how the server signs in -- a dead end dressed up as an auth problem."""
+    assert "/" in _http_paths(monkeypatch, tmp_path)
+
+
+def test_the_old_paths_still_answer(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """/mcp is what earlier versions served and what an already-authorized
+    connector points at; its RFC 9728 metadata sat one level down. Moving the
+    endpoint must not log those connectors out to save a suffix."""
+    paths = _http_paths(monkeypatch, tmp_path)
+    assert "/mcp" in paths
+    assert "/.well-known/oauth-protected-resource/mcp" in paths
+
+
+def test_the_oauth_routes_survive_serving_at_the_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Mounting MCP at / must not shadow the routes the sign-in flow needs."""
+    paths = _http_paths(monkeypatch, tmp_path)
+    for required in (
+        "/health",
+        "/login",
+        "/authorize",
+        "/token",
+        "/register",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource",
+    ):
+        assert required in paths, required

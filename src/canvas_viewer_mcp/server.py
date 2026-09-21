@@ -633,7 +633,46 @@ def main() -> None:
         _run_unconfigured(str(exc), host, port)
         return
 
-    mcp.run(transport="http", host=host, port=port)
+    _serve_http(host, port)
+
+
+def _serve_http(host: str, port: int) -> None:
+    """Serve MCP at the root, and at /mcp as well.
+
+    The root is what people paste. Told to add a connector, someone copies the
+    address out of their hosting dashboard -- and an address that silently
+    needs `/mcp` glued onto the end produces a 404, which Claude reports as
+    not being able to work out how the server signs in. That is a dead end
+    dressed up as an authentication problem, and it lands on exactly the
+    people who cannot tell the difference.
+
+    /mcp stays because it is what earlier versions served, what DEPLOY.md
+    documented, and what any already-authorized connector is pointed at.
+    Moving the endpoint would log those out to save a suffix.
+    """
+    import uvicorn
+    from starlette.routing import Route
+
+    app = mcp.http_app(path="/")
+
+    def alias(existing: str, new_path: str) -> None:
+        """Serve an existing route at a second path.
+
+        The same endpoint object, so the two paths share one session manager
+        rather than running two independent MCP servers in one process.
+        """
+        route = next(r for r in app.routes if isinstance(r, Route) and r.path == existing)
+        app.router.routes.append(
+            Route(new_path, endpoint=route.endpoint, methods=sorted(route.methods or ()))
+        )
+
+    alias("/", "/mcp")
+    # Serving MCP at the root moves its RFC 9728 metadata to the bare
+    # well-known path. A connector authorized against an earlier version
+    # discovered it one level down, so keep answering there too rather than
+    # 404 a client that is only re-checking what it was told before.
+    alias("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def _run_unconfigured(reason: str, host: str, port: int) -> None:

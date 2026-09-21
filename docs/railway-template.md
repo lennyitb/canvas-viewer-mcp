@@ -85,7 +85,9 @@ hostname to build its OAuth metadata from, and the first deploy of this
 template failed for exactly that reason.
 
 So the template must request a domain itself. In the composer's networking
-settings, choose **HTTP Proxy** and give it target port **8000**.
+settings, choose **HTTP Proxy** and give it the port the container listens on
+-- `8080`, the value Railway injects as `PORT`, not the `8000` the Dockerfile
+defaults to.
 
 Not TCP Proxy. That publishes a raw `proxy.rlwy.net:<port>` address rather
 than an HTTPS domain, and it sets `RAILWAY_TCP_PROXY_DOMAIN` and
@@ -93,9 +95,11 @@ than an HTTPS domain, and it sets `RAILWAY_TCP_PROXY_DOMAIN` and
 would still have no hostname, and a connector cannot be added over plain TCP
 anyway.
 
-Port 8000 because that is what the container listens on: Railway does not
-inject a `PORT` variable (its provided variables are all `RAILWAY_*`), so the
-image's own `ENV PORT=8000` is what takes effect.
+Railway's list of provided variables is all `RAILWAY_*` and does not mention
+`PORT`, which is misleading: it injects one anyway, and it wins over the
+`ENV PORT=8000` in the Dockerfile. Confirmed the hard way -- a first deploy
+served on 8080 while the domain pointed at 8000, and every request came back
+502.
 
 Check the result in the serialized config -- a service configured for this has
 a `networking` section; one that will fail has none.
@@ -117,9 +121,19 @@ That is the edge saying it cannot reach the container, not the container
 saying anything. `/health` returns it too, so there is no endpoint that
 behaves differently and nothing in the application logs at all.
 
-The fix is Settings -> Networking -> the edit icon beside the domain -> target
-port `8000`. Deleting and regenerating the domain also works once the app is
-genuinely up, because detection then has something to find.
+The fix is Settings -> Networking -> the edit icon beside the domain, set to
+whatever the container is actually listening on. Deleting and regenerating the
+domain also works once the app is genuinely up, because detection then has
+something to find.
+
+Do not assume that is 8000 because the image says so. Railway injects its own
+`PORT`, which overrides the `ENV PORT=8000` baked into the Dockerfile, and the
+server binds what it is given -- 8080 in practice. The image's value is only a
+fallback for somewhere that sets nothing. The deploy log settles it:
+
+    Uvicorn running on http://0.0.0.0:<port>
+
+Match the target port to that line rather than to anything in this repository.
 
 Worth re-checking whenever a first deploy failed and was later fixed, which is
 exactly the sequence that produces it.

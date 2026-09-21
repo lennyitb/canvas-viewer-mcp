@@ -70,10 +70,15 @@ public URL, which is the value a one-click install would otherwise founder on:
 nobody can know it before deploying, because the platform assigns it. The
 server reads it from the platform instead.
 
-When the deploy finishes Railway assigns the service a public address. Your
-connector URL is that address with `/mcp` on the end:
-`https://something.up.railway.app/mcp`. (If the service shows no domain, open
-**Settings → Networking → Generate Domain**.)
+When the deploy finishes Railway assigns the service a public address. That
+address **is** the connector URL — paste it as-is, no path on the end. (`/mcp`
+also works, for connectors added before v0.3.0.)
+
+If the service shows no domain, open **Settings → Networking → Generate
+Domain**. Check the domain's target port matches what the container is
+listening on; Railway detects it when the domain is created, so a domain
+generated while an earlier deploy was failing can be left pointing at the
+wrong one, and every request then returns Railway's own 502 page.
 
 Railway is about $5/month. [docs/railway-template.md](docs/railway-template.md)
 records exactly what the button deploys.

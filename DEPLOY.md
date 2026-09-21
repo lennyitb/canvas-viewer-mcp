@@ -169,7 +169,10 @@ will refuse the connector.
 
 On **claude.ai** (not mobile -- new connectors cannot be added there):
 Settings → Connectors → Add custom connector →
-`https://canvas-viewer-mcp.example.com/mcp`
+`https://canvas-viewer-mcp.example.com`
+
+The bare URL is the endpoint. `/mcp` answers identically, for connectors added
+before v0.3.0.
 
 Claude registers itself dynamically, then sends you to the login page. Enter
 the pairing code from step 4, or your own password if you set one. Once
