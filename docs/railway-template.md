@@ -108,6 +108,18 @@ The share URL carries a `referralCode`. That is Railway's default and it
 credits the template author for signups; drop the parameter if the README
 should not carry it.
 
+### The listing overview
+
+Railway requires the long-form overview on the listing page to carry a fixed
+set of sections, and rejects one that still contains its scaffold text. The
+filled-in version lives in [railway-overview.md](railway-overview.md); paste
+it whole into the template's description field.
+
+It is kept in the repository rather than only in Railway because it states
+things that have to stay true of the code -- that `PUBLIC_BASE_URL` is derived
+rather than asked for, that the volume belongs at `/data`, that there are no
+write paths -- and those claims should be reviewed when the code changes.
+
 ### Still to fill in
 
 The template deploys correctly, but three descriptions are empty, and they are
