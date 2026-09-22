@@ -49,6 +49,7 @@ from .canvas.content import (
     summarise_participation,
 )
 from .canvas.errors import CanvasAuthError, CanvasError, CanvasNotFoundError
+from .canvas.feedback import fetch_feedback, fetch_recent_feedback
 from .canvas.files import fetch_files, read_file
 from .canvas.html_text import REPLY_KEYWORDS, excerpt_sentences, html_to_markdown
 from .config import Config
@@ -75,6 +76,13 @@ bodies, and for each discussion the reply-requirement sentences from its
 description next to a count of what the user actually posted, replies to
 other people counted separately. `get_discussion` does the same for one topic
 and can also return the thread itself when the posts need reading.
+
+Instructor feedback -- comments, rubric marks, attached files -- is in the
+`feedback` field of `get_assignment`, and `list_feedback` sweeps what was
+graded or commented on recently. Comments sometimes carry work the grade does
+not show: a resubmission offer, a revision deadline, a request to meet. A
+`posted_at` of null means grades are not yet released and some feedback may
+still be hidden from the user.
 
 These tools report what Canvas holds and classify nothing. When the real
 deadline matters, read the assignment body, the course announcements, and the
@@ -274,13 +282,19 @@ async def list_assignments(course_id: int | None = None) -> dict[str, Any]:
 
 
 @mcp.tool
-async def get_assignment(course_id: int, assignment_id: int) -> dict[str, Any]:
-    """Fetch one assignment including its full description.
+async def get_assignment(
+    course_id: int, assignment_id: int, include_feedback: bool = True
+) -> dict[str, Any]:
+    """Fetch one assignment including its full description and feedback.
 
     The description often names the real deadline in prose when the `due_at`
     field is wrong or absent. For a discussion it also names the reply
     requirement and the separate, later reply deadline, neither of which Canvas
     exposes as a field.
+
+    `feedback` holds the grade, every submission comment (each marked `mine`
+    when the user wrote it), and the rubric with each criterion's mark.
+    `include_feedback=False` skips the extra request.
     """
     client = await get_client()
     raw = await client.get(
@@ -293,7 +307,75 @@ async def get_assignment(course_id: int, assignment_id: int) -> dict[str, Any]:
     row = assignment.model_dump()
     if _is_discussion(row):
         row["completion_caveat"] = DISCUSSION_CAVEAT
+    if include_feedback:
+        me = await _self()
+        try:
+            feedback = await fetch_feedback(
+                client,
+                course_id,
+                assignment_id,
+                rubric=raw.get("rubric"),
+                my_id=me.get("id") if me else None,
+            )
+            row["feedback"] = feedback.model_dump()
+        except (CanvasAuthError, CanvasNotFoundError) as exc:
+            row["feedback"] = _unavailable(exc)
     return row
+
+
+@mcp.tool
+async def list_feedback(
+    days: int = 14, course_id: int | None = None, include_own_comments: bool = False
+) -> dict[str, Any]:
+    """Assignments graded, or commented on by someone else, in the last `days`.
+
+    One request per course. Each row carries the grade, the comments, and the
+    rubric marks; the user's own comments are left out unless
+    `include_own_comments` is set. Rows with `posted_at` absent are not yet
+    released, and may be missing feedback the instructor has written.
+
+    Nothing here decides whether feedback needs acting on. Read the comments.
+    """
+    client = await get_client()
+    courses = await _courses()
+    if course_id is not None:
+        courses = [c for c in courses if c["id"] == course_id]
+        if not courses:
+            return {"error": f"No active course with id {course_id}."}
+
+    me = await _self()
+    my_id = me.get("id") if me else None
+    since = datetime.now(UTC) - timedelta(days=days)
+    comment_drop = () if include_own_comments else ("mine",)
+
+    results: list[dict[str, Any]] = []
+    for course in courses:
+        try:
+            items = await fetch_recent_feedback(client, course["id"], my_id=my_id, since=since)
+        except (CanvasAuthError, CanvasNotFoundError) as exc:
+            results.append({"course_id": course["id"], **_unavailable(exc)})
+            continue
+        for assignment, feedback in items:
+            comments = [c for c in feedback.comments if include_own_comments or c.mine is not True]
+            row: dict[str, Any] = {
+                "assignment_id": assignment.get("id"),
+                "course_id": course["id"],
+                "course_name": course.get("name"),
+                "name": assignment.get("name"),
+                "points_possible": assignment.get("points_possible"),
+                **_dump(feedback, drop=("comments", "rubric")),
+            }
+            if comments:
+                row["comments"] = [_dump(c, drop=comment_drop) for c in comments]
+            if feedback.rubric:
+                row["rubric"] = [_dump(r) for r in feedback.rubric]
+            results.append({k: v for k, v in row.items() if v is not None})
+
+    return {
+        "count": len(results),
+        "since": since.strftime("%Y-%m-%d"),
+        "feedback": results,
+    }
 
 
 # ---- announcements and discussions -------------------------------------------

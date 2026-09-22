@@ -53,6 +53,7 @@ Follow-up calls are exceptions, not routine:
 | `reply_requirement` is cut off (`[...]`) before it states a reply count or deadline | `get_assignment` |
 | Stale-dated item whose estimated date lands in the window | `get_assignment` (description sometimes names the real date) |
 | An announcement refers to a specific item ambiguously | `get_assignment` |
+| A grade of 0 or a sharp drop posted in the last 10 days | `list_feedback` with `days: 10` and that `course_id` (the comment may offer a resubmission, which is work to list) |
 
 `get_discussion` isn't needed for this report. If you ever do call it, leave
 `entries` at its default; `"all"` returns the whole thread.
