@@ -11,10 +11,12 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime, timedelta
 
 from .canvas.assignments import fetch_assignments
 from .canvas.client import CanvasClient
 from .canvas.errors import CanvasError
+from .canvas.feedback import fetch_recent_feedback
 from .config import Config, ConfigError
 
 
@@ -86,6 +88,41 @@ async def _assignments(client: CanvasClient, course_id: int | None) -> int:
     return 0
 
 
+async def _feedback(client: CanvasClient, course_id: int | None) -> int:
+    """Dump feedback from the last 30 days. No filtering beyond the window."""
+    courses = await client.active_courses()
+    if course_id is not None:
+        courses = [c for c in courses if c["id"] == course_id]
+        if not courses:
+            print(f"No active course with id {course_id}.", file=sys.stderr)
+            return 1
+
+    me = await client.current_user()
+    since = datetime.now(UTC) - timedelta(days=30)
+    total = 0
+    for course in courses:
+        items = await fetch_recent_feedback(client, course["id"], my_id=me.get("id"), since=since)
+        if not items:
+            continue
+        print(f"\n=== [{course['id']}] {course.get('name')} ({len(items)}) ===")
+        for assignment, fb in items:
+            score = "-" if fb.score is None else f"{fb.score:g}"
+            posted = "posted" if fb.posted_at else "UNPOSTED"
+            print(f"  {assignment.get('id'):>8}  {score:>6}  {posted:<9} {assignment.get('name')}")
+            for c in fb.comments:
+                who = "me" if c.mine else (c.author_name or "?")
+                text = (c.comment or "(no text)").replace("\n", " ")[:90]
+                files = f" [+{len(c.attachments)} file(s)]" if c.attachments else ""
+                print(f"{'':>12}- {who}: {text}{files}")
+            for r in fb.rubric:
+                pts = "-" if r.points is None else f"{r.points:g}"
+                print(f"{'':>12}# {r.criterion}: {pts}/{r.points_possible}")
+            total += 1
+
+    print(f"\n{total} submission(s) with feedback in the last 30 days.")
+    return 0
+
+
 def _hash_password() -> int:
     """Print an argon2 hash for AUTH_PASSWORD_HASH.
 
@@ -115,6 +152,7 @@ COMMANDS: dict[str, Handler] = {
     "whoami": _whoami,
     "courses": _courses,
     "assignments": _assignments,
+    "feedback": _feedback,
 }
 
 
@@ -166,7 +204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
-        "--course", type=int, default=None, help="limit to one course id (assignments only)"
+        "--course", type=int, default=None, help="limit to one course id (assignments and feedback)"
     )
     args = parser.parse_args(argv)
 

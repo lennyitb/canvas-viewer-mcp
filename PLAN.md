@@ -196,6 +196,30 @@ tested against the components -- the built image, all three compose profiles,
 both halves of the script -- but no run has yet gone from "deploy this on this
 machine" to a connector answering in claude.ai.
 
+## Stage 9 — Assignment feedback
+
+A score says how an assignment went; the comments say what to do about it.
+"Resubmit by Friday for full credit" is outstanding work that no date field
+carries, and until now the server dropped it along with every rubric mark.
+
+- [x] `canvas/feedback.py`: submission comments (author, `mine`, attachments,
+      media flag, capped text) and rubric criteria joined to their marks,
+      unmarked criteria kept with `points: null`
+- [x] `get_assignment` returns `feedback`; a 403 on it is a note, not a failure
+- [x] `list_feedback`: one request per course via `students/submissions`,
+      windowed on `graded_at` or any comment by someone else, filtered here
+      rather than by `graded_since` because a comment needs no regrade
+- [x] `posted_at` kept: null means grades are unreleased and feedback may be
+      hidden
+- [x] Checkpoint: live against the real account, through the MCP tools.
+      `list_feedback(days=30)` returned 30 submissions across 11 courses in
+      about 20k characters, none unavailable; a history discussion graded
+      60/100 showed why on its rubric -- "Replies to classmates: 0/40" --
+      which neither the score nor the submission state says
+- [x] Rubric titles arrive with the editor's line breaks inside them
+      ("Comprehension\n(Relevance of\nPost)"); found live, now collapsed
+- [ ] The same, through the deployed connector in claude.ai
+
 ## Running concern — response size
 Tool results consume model context and mobile latency. List tools return
 summaries plus IDs; detail is fetched on request. Bodies are converted to

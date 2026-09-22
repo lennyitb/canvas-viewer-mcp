@@ -19,6 +19,10 @@ along with the assignment instructions, announcements, discussions, course
 files and modules. If the instructor wrote "due Friday" in the assignment text
 or in an announcement, Claude can find it there.
 
+It reads your instructors' feedback too: the comments on your submissions and
+how each part of the rubric was marked. A comment like "resubmit by Friday"
+is work that no due date shows.
+
 It also checks discussion boards properly. Canvas marks a discussion as
 submitted as soon as you make your first post, even when you still owe replies
 to classmates. Claude can count what you have actually posted and compare it
@@ -30,6 +34,7 @@ Things you can ask once it's set up:
 - "Am I caught up in all my classes?"
 - "Do I still owe any discussion replies?"
 - "What did my instructors announce this week?"
+- "Did I get any feedback this week?"
 - "Please help me develop a reply to Chris in the Week 4 history discussion"
 - "Please fetch today's chemistry lab, put a copy in my folder, and summarize the procedure"
 
@@ -217,7 +222,7 @@ Everything below is for people who want to know how it works. You don't need
 any of it to use Canvas Viewer.
 
 Canvas Viewer is a read-only [MCP](https://modelcontextprotocol.io) server with
-twelve tools. The hosted form runs in a container behind a single-user OAuth
+thirteen tools. The hosted form runs in a container behind a single-user OAuth
 2.1 login. [PLAN.md](PLAN.md) describes how it was built.
 
 ### Design
@@ -230,7 +235,7 @@ and `updated_at`.
 
 The server does no classification. It has no "overdue" buckets and no guesses
 about stale dates. It returns what Canvas holds, plus assignment bodies, files,
-discussions and announcements, and the model (guided by the skills) does the
+discussions, announcements and instructor feedback, and the model (guided by the skills) does the
 interpreting.
 
 ### Tools
@@ -239,7 +244,8 @@ interpreting.
 | --- | --- |
 | `list_courses` | Active courses, term, current score |
 | `list_assignments` | Every assignment, no date filtering, bodies omitted |
-| `get_assignment` | One assignment including its full description |
+| `get_assignment` | One assignment including its full description and feedback: comments, rubric marks, grade |
+| `list_feedback` | Assignments graded or commented on by someone else in the last N days, with the comments and rubric marks |
 | `list_announcements` | Recent announcements across all courses, with text (or titles only) |
 | `list_discussions` / `get_discussion` | Topics, and one topic with the user's own participation counted; the reply tree on request |
 | `list_discussion_participation` | Every graded discussion with the reply requirement and the user's post counts, in one call |
@@ -287,6 +293,9 @@ lean and detail is opt-in:
 - `get_discussion` returns counts and the topic text by default, not the
   thread. On one real topic that is under 1k characters instead of 36k.
 - `list_announcements` takes `include_messages=False` and a `course_id`.
+- `list_feedback` returns only recently graded or commented work, and leaves
+  out the user's own comments unless asked. Comments are capped at 2k
+  characters with a visible truncation marker.
 - `list_discussion_participation` replaces a `list_assignments` sweep followed
   by `get_assignment` and `get_discussion` per discussion. On a course with 20
   graded discussions that is roughly 14k characters in place of 765k.

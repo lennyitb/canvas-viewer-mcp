@@ -8,6 +8,7 @@ courses.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -176,7 +177,12 @@ async def test_get_assignment_carries_the_caveat_and_the_topic_id() -> None:
     )
 
     async with Client(server.mcp) as c:
-        result = (await c.call_tool("get_assignment", {"course_id": 1, "assignment_id": 10})).data
+        result = (
+            await c.call_tool(
+                "get_assignment",
+                {"course_id": 1, "assignment_id": 10, "include_feedback": False},
+            )
+        ).data
 
     assert "completion_caveat" in result
     assert result["discussion_topic_id"] == 946269
@@ -258,6 +264,7 @@ async def test_every_tool_is_registered() -> None:
         "list_courses",
         "list_assignments",
         "get_assignment",
+        "list_feedback",
         "list_announcements",
         "list_discussions",
         "get_discussion",
@@ -404,3 +411,142 @@ def test_the_oauth_routes_survive_serving_at_the_root(
         "/.well-known/oauth-protected-resource",
     ):
         assert required in paths, required
+
+
+# ---- feedback ----------------------------------------------------------------
+
+
+def _mock_self(user_id: int = 7) -> None:
+    respx.get(f"{API}/users/self").mock(
+        return_value=httpx.Response(200, json={"id": user_id, "name": "Me"})
+    )
+
+
+def _recent() -> str:
+    return (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@respx.mock
+async def test_get_assignment_returns_feedback_joined_to_the_rubric() -> None:
+    _mock_courses()
+    _mock_self()
+    respx.get(f"{API}/courses/1/assignments/10").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **_assignment(10, 1),
+                "rubric": [{"id": "_1", "description": "Thesis", "points": 10.0}],
+            },
+        )
+    )
+    route = respx.get(f"{API}/courses/1/assignments/10/submissions/self").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "score": 6.0,
+                "posted_at": "2026-09-20T00:00:00Z",
+                "submission_comments": [
+                    {"author_id": 3, "author_name": "Dr. I", "comment": "Resubmit by Friday."}
+                ],
+                "rubric_assessment": {"_1": {"points": 6.0, "comments": "Vague."}},
+            },
+        )
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("get_assignment", {"course_id": 1, "assignment_id": 10})).data
+
+    fb = result["feedback"]
+    assert fb["score"] == 6.0
+    assert fb["comments"][0]["comment"] == "Resubmit by Friday."
+    assert fb["comments"][0]["mine"] is False
+    assert fb["rubric"][0] == {
+        "criterion": "Thesis",
+        "points": 6.0,
+        "points_possible": 10.0,
+        "rating": None,
+        "comments": "Vague.",
+    }
+    includes = route.calls.last.request.url.params.get_list("include[]")
+    assert set(includes) == {"submission_comments", "rubric_assessment"}
+
+
+@respx.mock
+async def test_get_assignment_survives_unavailable_feedback() -> None:
+    _mock_courses()
+    _mock_self()
+    respx.get(f"{API}/courses/1/assignments/10").mock(
+        return_value=httpx.Response(200, json=_assignment(10, 1))
+    )
+    respx.get(f"{API}/courses/1/assignments/10/submissions/self").mock(
+        return_value=httpx.Response(403, text='{"status":"unauthorized"}')
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("get_assignment", {"course_id": 1, "assignment_id": 10})).data
+
+    assert result["name"] == "HW 10"
+    assert result["feedback"]["unavailable"] is True
+
+
+@respx.mock
+async def test_get_assignment_without_feedback_makes_no_submission_request() -> None:
+    _mock_courses()
+    respx.get(f"{API}/courses/1/assignments/10").mock(
+        return_value=httpx.Response(200, json=_assignment(10, 1))
+    )
+    route = respx.get(f"{API}/courses/1/assignments/10/submissions/self")
+
+    async with Client(server.mcp) as c:
+        result = (
+            await c.call_tool(
+                "get_assignment",
+                {"course_id": 1, "assignment_id": 10, "include_feedback": False},
+            )
+        ).data
+
+    assert "feedback" not in result
+    assert not route.called
+
+
+@respx.mock
+async def test_list_feedback_sweeps_past_a_locked_course_and_hides_own_comments() -> None:
+    _mock_courses()
+    _mock_self()
+    respx.get(f"{API}/courses/1/students/submissions").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "score": 4.0,
+                    "graded_at": _recent(),
+                    "submission_comments": [
+                        {"author_id": 7, "comment": "Mine", "created_at": _recent()},
+                        {"author_id": 3, "comment": "See me", "created_at": _recent()},
+                    ],
+                    "assignment": {"id": 10, "name": "HW 10", "points_possible": 10.0},
+                },
+                {"graded_at": "2020-01-01T00:00:00Z", "assignment": {"id": 11, "name": "Old"}},
+            ],
+        )
+    )
+    respx.get(f"{API}/courses/2/students/submissions").mock(
+        return_value=httpx.Response(403, text='{"status":"unauthorized"}')
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_feedback", {"days": 7})).data
+        with_own = (
+            await c.call_tool("list_feedback", {"course_id": 1, "include_own_comments": True})
+        ).data
+
+    rows = result["feedback"]
+    assert rows[0]["name"] == "HW 10"
+    assert rows[0]["course_name"] == "Open Course"
+    assert [c["comment"] for c in rows[0]["comments"]] == ["See me"]
+    assert "mine" not in rows[0]["comments"][0], "redundant once own comments are dropped"
+    assert rows[1] == {"course_id": 2, **rows[1], "unavailable": True}
+    assert result["count"] == 2, "the old submission is outside the window"
+
+    own = with_own["feedback"][0]["comments"]
+    assert [(c["comment"], c["mine"]) for c in own] == [("Mine", True), ("See me", False)]
