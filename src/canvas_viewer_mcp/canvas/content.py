@@ -412,7 +412,9 @@ async def fetch_pages(
 
 
 async def fetch_page(client: CanvasClient, course_id: int, page_url: str) -> Page:
-    raw = await client.get(f"courses/{course_id}/pages/{page_url}")
+    # Canvas serves the course home page from its own endpoint, not as a slug.
+    path = "front_page" if page_url == "front_page" else f"pages/{page_url}"
+    raw = await client.get(f"courses/{course_id}/{path}")
     return flatten_page(raw, include_body=True)
 
 

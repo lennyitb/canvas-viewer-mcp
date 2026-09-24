@@ -599,6 +599,18 @@ async def read_course_file(file_id: int) -> dict[str, Any]:
         return _unavailable(exc)
 
 
+# Courses that hide the Pages tab usually still publish the pages themselves,
+# typically one per week, linked from the course home page. Without this
+# pointer a caller tends to read the refusal as "this course has no pages".
+PAGES_HIDDEN_HINT = (
+    "The pages themselves are usually still readable: courses that hide this "
+    "list commonly link their (often weekly) pages from the course home page. "
+    'Call `get_page` with `page_url` "front_page" and follow its '
+    "`/courses/<id>/pages/<slug>` links by passing each slug to `get_page`. "
+    "`list_modules` may link the same pages."
+)
+
+
 @mcp.tool
 async def list_pages(course_id: int) -> dict[str, Any]:
     """List a course's wiki pages. Many courses hide the Pages tab."""
@@ -606,13 +618,17 @@ async def list_pages(course_id: int) -> dict[str, Any]:
     try:
         pages = await fetch_pages(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
-        return _unavailable(exc)
+        return {**_unavailable(exc), "hint": PAGES_HIDDEN_HINT}
     return {"count": len(pages), "pages": [_dump(p) for p in pages]}
 
 
 @mcp.tool
 async def get_page(course_id: int, page_url: str) -> dict[str, Any]:
-    """Fetch one wiki page's full body. `page_url` is the slug from `list_pages`."""
+    """Fetch one wiki page's full body.
+
+    `page_url` is the slug from `list_pages` or from a `/pages/<slug>` link,
+    or "front_page" for the course home page.
+    """
     client = await get_client()
     try:
         return (await fetch_page(client, course_id, page_url)).model_dump()

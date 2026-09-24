@@ -77,6 +77,28 @@ async def test_missing_pages_tab_reports_unavailable() -> None:
         result = (await c.call_tool("list_pages", {"course_id": 2})).data
 
     assert result["unavailable"] is True
+    assert "front_page" in result["hint"], "a hidden list should point at the home page"
+
+
+@respx.mock
+async def test_front_page_is_fetched_from_its_own_endpoint() -> None:
+    _mock_courses()
+    route = respx.get(f"{API}/courses/2/front_page").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "url": "home",
+                "title": "Home",
+                "body": '<a href="/courses/2/pages/week-1">Week 1</a>',
+            },
+        )
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("get_page", {"course_id": 2, "page_url": "front_page"})).data
+
+    assert route.called
+    assert "/courses/2/pages/week-1" in result["body"]
 
 
 @respx.mock
