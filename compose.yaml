@@ -64,11 +64,17 @@ services:
       # a code that reached a log aggregator gets revoked.
       AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      # Optional: hide stale Canvas items or serve a local file in their place.
+      # See "Overrides" in README.md. A missing file means no overrides.
+      CANVAS_OVERRIDES_FILE: /overrides/overrides.toml
     secrets:
       - canvas_token
     volumes:
       # OAuth state. Drop this and every redeploy deauthorizes the connector.
       - canvas-viewer-mcp-data:/data
+      # overrides.toml and the files it names. Read-only: the server never
+      # writes here, and edits on the host apply without a restart.
+      - ./overrides:/overrides:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
       interval: 30s

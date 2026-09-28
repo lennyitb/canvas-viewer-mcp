@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -16,7 +17,7 @@ import pytest
 import respx
 from fastmcp import Client
 
-from canvas_viewer_mcp import server
+from canvas_viewer_mcp import overrides, server
 
 BASE = "https://canvas.test"
 API = f"{BASE}/api/v1"
@@ -28,9 +29,12 @@ COURSES = [
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
     monkeypatch.setenv("CANVAS_BASE_URL", BASE)
     monkeypatch.setenv("CANVAS_TOKEN", "test-token")
+    # Never let a developer's real overrides file leak into the suite.
+    monkeypatch.setenv("CANVAS_OVERRIDES_FILE", str(tmp_path / "overrides.toml"))
+    overrides.reset_cache()
     server._client = None
     server._courses_cache = None
     server._self_cache = None
@@ -296,6 +300,7 @@ async def test_every_tool_is_registered() -> None:
         "list_pages",
         "get_page",
         "list_modules",
+        "get_syllabus",
     }
 
 

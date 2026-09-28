@@ -135,7 +135,9 @@ docker info >/dev/null 2>&1 || {
 }
 note "docker: ok"
 
-mkdir -p "$DIR/secrets"
+# overrides/ is where compose.yaml looks for overrides.toml. Made here so the
+# bind mount finds a directory this user owns, not one docker creates as root.
+mkdir -p "$DIR/secrets" "$DIR/overrides"
 DIR=$(cd -- "$DIR" && pwd)
 ENV_FILE=$DIR/.env
 TOKEN_FILE=$DIR/secrets/canvas_token

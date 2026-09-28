@@ -18,6 +18,7 @@ from .canvas.client import CanvasClient
 from .canvas.errors import CanvasError
 from .canvas.feedback import fetch_recent_feedback
 from .config import Config, ConfigError
+from .overrides import OverridesError
 
 
 async def _whoami(client: CanvasClient, course_id: int | None) -> int:
@@ -123,6 +124,81 @@ async def _feedback(client: CanvasClient, course_id: int | None) -> int:
     return 0
 
 
+async def _overrides(client: CanvasClient, course_id: int | None) -> int:
+    """Show what each override matches in Canvas right now.
+
+    The MCP output is silent by design, so this is the one place to confirm a
+    rule caught the item it was written for -- and only that item.
+    """
+    from .canvas.content import fetch_pages
+    from .canvas.files import fetch_file_meta, fetch_files
+    from .overrides import (
+        Overrides,
+        OverridesError,
+        load_file,
+        load_replacement,
+        overrides_path,
+    )
+
+    path = overrides_path()
+    if not path.exists():
+        print(f"No overrides file at {path}.")
+        return 0
+    rules = load_file(path).rules
+    if course_id is not None:
+        rules = [r for r in rules if r.course == course_id]
+    print(f"{len(rules)} override(s) in {path}:\n")
+
+    problems = 0
+    for rule in rules:
+        # Matched through the same lookups the server uses, so the probe
+        # cannot disagree with what the tools actually do.
+        only = Overrides([rule])
+        print(f"  {rule.describe()}")
+        if rule.action == "replace":
+            try:
+                local = load_replacement(rule)
+                print(f"      local file: {local.content_type}, {local.size} bytes")
+            except OverridesError as exc:
+                print(f"      PROBLEM: {exc}")
+                problems += 1
+
+        try:
+            if rule.kind == "syllabus":
+                raw = await client.get(f"courses/{rule.course}", {"include[]": ["syllabus_body"]})
+                has_body = bool(raw.get("syllabus_body"))
+                matched = [f"syllabus of {raw.get('name')}" + ("" if has_body else " (empty)")]
+            elif rule.kind == "file" and rule.id is not None:
+                # Fetched directly: many courses hide the Files tab, but a
+                # file linked from elsewhere is still readable by id.
+                f = await fetch_file_meta(client, rule.id)
+                matched = [f"file {f.id} {f.display_name!r}"]
+            elif rule.kind == "file":
+                files = await fetch_files(client, rule.course)
+                matched = [
+                    f"file {f.id} {f.display_name!r}"
+                    for f in files
+                    if only.for_file(rule.course, f.id, f.display_name)
+                ]
+            else:
+                pages = await fetch_pages(client, rule.course)
+                matched = [
+                    f"page {p.url!r} {p.title!r}"
+                    for p in pages
+                    if only.for_page(rule.course, p.url, p.title)
+                ]
+        except CanvasError as exc:
+            print(f"      could not check against Canvas: {exc}")
+            continue
+
+        if not matched:
+            print("      MATCHED NOTHING")
+            problems += 1
+        for m in matched:
+            print(f"      matches {m}")
+    return 1 if problems else 0
+
+
 def _hash_password() -> int:
     """Print an argon2 hash for AUTH_PASSWORD_HASH.
 
@@ -153,6 +229,7 @@ COMMANDS: dict[str, Handler] = {
     "courses": _courses,
     "assignments": _assignments,
     "feedback": _feedback,
+    "overrides": _overrides,
 }
 
 
@@ -204,7 +281,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
-        "--course", type=int, default=None, help="limit to one course id (assignments and feedback)"
+        "--course",
+        type=int,
+        default=None,
+        help="limit to one course id (assignments, feedback, overrides)",
     )
     args = parser.parse_args(argv)
 
@@ -218,6 +298,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return asyncio.run(_run(args.command, args.course))
     except ConfigError as exc:
         print(f"Configuration problem: {exc}", file=sys.stderr)
+        return 2
+    except OverridesError as exc:
+        print(f"Overrides problem: {exc}", file=sys.stderr)
         return 2
     except CanvasError as exc:
         print(f"Canvas error: {exc}", file=sys.stderr)

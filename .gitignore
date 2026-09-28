@@ -15,6 +15,8 @@ credentials.json
 *.sqlite3
 *.db
 data/
+# course material served in place of Canvas content; personal, not code
+overrides/
 .cache/
 
 # ---- recorded API fixtures (scrubbed ones are committed explicitly) ----

@@ -105,10 +105,48 @@ def _extract_pdf(data: bytes) -> tuple[str | None, str | None]:
     return text, note
 
 
-async def read_file(client: CanvasClient, file_id: int) -> ExtractedFile:
-    """Fetch one file's metadata and extract its text, where that is possible."""
-    meta_raw = await client.get(f"files/{file_id}")
-    meta = flatten_file(meta_raw)
+def extract_text(data: bytes, content_type: str | None) -> tuple[str | None, str | None]:
+    """Readable text from a file's bytes, and a note when it is absent or cut.
+
+    Shared by Canvas downloads and local override files, so a replacement
+    comes back exactly as the original would have.
+    """
+    kind = (content_type or "").split(";")[0].strip().lower()
+    text: str | None
+    note: str | None = None
+
+    if kind == "application/pdf":
+        text, note = _extract_pdf(data)
+    elif kind in TEXTUAL_TYPES or kind.startswith("text/"):
+        text = data.decode("utf-8", errors="replace")
+    else:
+        text = None
+        note = (
+            f"No text extractor for {kind or 'unknown type'}. "
+            "Supported: PDF and text-based formats."
+        )
+
+    if text and len(text) > MAX_EXTRACTED_CHARS:
+        removed = len(text) - MAX_EXTRACTED_CHARS
+        text = text[:MAX_EXTRACTED_CHARS]
+        suffix = f" Truncated, {removed} more characters."
+        note = (note + suffix) if note else suffix.strip()
+    return text, note
+
+
+async def fetch_file_meta(client: CanvasClient, file_id: int) -> CourseFile:
+    return flatten_file(await client.get(f"files/{file_id}"))
+
+
+async def read_file(
+    client: CanvasClient, file_id: int, *, meta: CourseFile | None = None
+) -> ExtractedFile:
+    """Fetch one file's metadata and extract its text, where that is possible.
+
+    ``meta`` skips the metadata request when the caller already has it.
+    """
+    if meta is None:
+        meta = await fetch_file_meta(client, file_id)
 
     if not meta.url:
         return ExtractedFile(
@@ -137,26 +175,7 @@ async def read_file(client: CanvasClient, file_id: int) -> ExtractedFile:
     except httpx.HTTPError as exc:
         raise CanvasError(f"Could not download file {file_id}: {exc}") from exc
 
-    content_type = (meta.content_type or "").split(";")[0].strip().lower()
-    text: str | None
-    note: str | None = None
-
-    if content_type == "application/pdf":
-        text, note = _extract_pdf(data)
-    elif content_type in TEXTUAL_TYPES or content_type.startswith("text/"):
-        text = data.decode("utf-8", errors="replace")
-    else:
-        text = None
-        note = (
-            f"No text extractor for {content_type or 'unknown type'}. "
-            "Supported: PDF and text-based formats."
-        )
-
-    if text and len(text) > MAX_EXTRACTED_CHARS:
-        removed = len(text) - MAX_EXTRACTED_CHARS
-        text = text[:MAX_EXTRACTED_CHARS]
-        suffix = f" Truncated, {removed} more characters."
-        note = (note + suffix) if note else suffix.strip()
+    text, note = extract_text(data, meta.content_type)
 
     return ExtractedFile(
         id=meta.id,

@@ -39,6 +39,7 @@ from . import __version__
 from .canvas.assignments import fetch_assignments, flatten_assignment
 from .canvas.client import CanvasClient
 from .canvas.content import (
+    ModuleItem,
     fetch_announcements,
     fetch_discussion,
     fetch_discussions,
@@ -50,9 +51,11 @@ from .canvas.content import (
 )
 from .canvas.errors import CanvasAuthError, CanvasError, CanvasNotFoundError
 from .canvas.feedback import fetch_feedback, fetch_recent_feedback
-from .canvas.files import fetch_files, read_file
+from .canvas.files import ExtractedFile, fetch_file_meta, fetch_files, read_file
 from .canvas.html_text import REPLY_KEYWORDS, excerpt_sentences, html_to_markdown
 from .config import Config
+from .overrides import Override, OverridesError, load_replacement
+from .overrides import current as _overrides
 
 INSTRUCTIONS = """
 Read-only access to the user's Canvas LMS account.
@@ -85,8 +88,9 @@ not show: a resubmission offer, a revision deadline, a request to meet. A
 still be hidden from the user.
 
 These tools report what Canvas holds and classify nothing. When the real
-deadline matters, read the assignment body, the course announcements, and the
-module ordering before concluding anything from `due_at` alone.
+deadline matters, read the assignment body, the course announcements, the
+syllabus (`get_syllabus`), and the module ordering before concluding anything
+from `due_at` alone.
 """.strip()
 
 DISCUSSION_CAVEAT = (
@@ -189,6 +193,17 @@ async def _self() -> dict[str, Any] | None:
         except CanvasError:
             return None
     return _self_cache
+
+
+def _hidden() -> dict[str, Any]:
+    """What a hidden item looks like: exactly what Canvas refusing it would."""
+    return _unavailable(CanvasNotFoundError())
+
+
+def _override_failed(exc: OverridesError) -> dict[str, Any]:
+    # Deliberately loud. Falling back to Canvas here would quietly put back
+    # the very content the user asked never to see again.
+    return {"error": f"Local override could not be served: {exc}"}
 
 
 def _unavailable(exc: Exception) -> dict[str, Any]:
@@ -376,6 +391,47 @@ async def list_feedback(
         "since": since.strftime("%Y-%m-%d"),
         "feedback": results,
     }
+
+
+# ---- syllabus ----------------------------------------------------------------
+
+
+@mcp.tool
+async def get_syllabus(course_id: int) -> dict[str, Any]:
+    """Fetch a course's Syllabus tab, the body shown at /assignments/syllabus.
+
+    Syllabi often carry the schedule, the grading breakdown, and deadline
+    policy that assignment metadata leaves out. Many courses leave this tab
+    empty and post the syllabus as a file or page instead; `body` is then
+    absent and `list_files`, `list_pages`, or `list_modules` are the next place
+    to look.
+    """
+    client = await get_client()
+    rule = _overrides().for_syllabus(course_id)
+    if rule is not None and rule.action == "hide":
+        return _hidden()
+    try:
+        raw = await client.get(f"courses/{course_id}", {"include[]": ["syllabus_body"]})
+    except (CanvasAuthError, CanvasNotFoundError) as exc:
+        return _unavailable(exc)
+
+    if rule is not None:
+        try:
+            body = load_replacement(rule).text
+        except OverridesError as exc:
+            return _override_failed(exc)
+    else:
+        body = html_to_markdown(raw.get("syllabus_body"))
+
+    row: dict[str, Any] = {
+        "course_id": course_id,
+        "course_name": raw.get("name"),
+        "html_url": f"{client.web_url}/courses/{course_id}/assignments/syllabus",
+        "body": body or None,
+    }
+    if not body:
+        row["note"] = "The Syllabus tab is empty in this course."
+    return {k: v for k, v in row.items() if v is not None}
 
 
 # ---- announcements and discussions -------------------------------------------
@@ -582,7 +638,32 @@ async def list_files(course_id: int) -> dict[str, Any]:
         files = await fetch_files(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
-    return {"count": len(files), "files": [_dump(f) for f in files]}
+
+    overrides = _overrides()
+    rows: list[dict[str, Any]] = []
+    for f in files:
+        rule = overrides.for_file(course_id, f.id, f.display_name)
+        if rule is None:
+            rows.append(_dump(f))
+        elif rule.action == "replace":
+            try:
+                local = load_replacement(rule)
+            except OverridesError as exc:
+                return _override_failed(exc)
+            # The Canvas download URL would lead straight back to the old file.
+            rows.append(
+                _dump(
+                    f.model_copy(
+                        update={
+                            "size": local.size,
+                            "content_type": local.content_type,
+                            "updated_at": local.updated_at,
+                            "url": None,
+                        }
+                    )
+                )
+            )
+    return {"count": len(rows), "files": rows}
 
 
 @mcp.tool
@@ -594,9 +675,27 @@ async def read_course_file(file_id: int) -> dict[str, Any]:
     """
     client = await get_client()
     try:
-        return (await read_file(client, file_id)).model_dump()
+        meta = await fetch_file_meta(client, file_id)
+        rule = _overrides().for_file(None, file_id, meta.display_name)
+        if rule is None:
+            return (await read_file(client, file_id, meta=meta)).model_dump()
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
+
+    if rule.action == "hide":
+        return _hidden()
+    try:
+        local = load_replacement(rule)
+    except OverridesError as exc:
+        return _override_failed(exc)
+    return ExtractedFile(
+        id=meta.id,
+        display_name=meta.display_name,
+        content_type=local.content_type,
+        size=local.size,
+        text=local.text,
+        note=local.note,
+    ).model_dump()
 
 
 # Courses that hide the Pages tab usually still publish the pages themselves,
@@ -619,7 +718,28 @@ async def list_pages(course_id: int) -> dict[str, Any]:
         pages = await fetch_pages(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return {**_unavailable(exc), "hint": PAGES_HIDDEN_HINT}
-    return {"count": len(pages), "pages": [_dump(p) for p in pages]}
+
+    overrides = _overrides()
+    rows: list[dict[str, Any]] = []
+    for p in pages:
+        rule = overrides.for_page(course_id, p.url, p.title)
+        if rule is None:
+            rows.append(_dump(p))
+        elif rule.action == "replace":
+            rows.append(_dump(p.model_copy(update={"updated_at": _replaced_at(rule)})))
+    return {"count": len(rows), "pages": rows}
+
+
+def _replaced_at(rule: Override) -> str | None:
+    """The local file's modification time, or None if it cannot be read.
+
+    A listing only needs the date; an unreadable file is reported when the
+    body itself is asked for.
+    """
+    try:
+        return load_replacement(rule).updated_at
+    except OverridesError:
+        return None
 
 
 @mcp.tool
@@ -631,9 +751,21 @@ async def get_page(course_id: int, page_url: str) -> dict[str, Any]:
     """
     client = await get_client()
     try:
-        return (await fetch_page(client, course_id, page_url)).model_dump()
+        page = await fetch_page(client, course_id, page_url)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
+
+    # Matched on what Canvas returned, so "front_page" resolves to its slug.
+    rule = _overrides().for_page(course_id, page.url, page.title)
+    if rule is None:
+        return page.model_dump()
+    if rule.action == "hide":
+        return _hidden()
+    try:
+        local = load_replacement(rule)
+    except OverridesError as exc:
+        return _override_failed(exc)
+    return page.model_copy(update={"body": local.text, "updated_at": local.updated_at}).model_dump()
 
 
 @mcp.tool
@@ -648,7 +780,22 @@ async def list_modules(course_id: int) -> dict[str, Any]:
         modules = await fetch_modules(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
+
+    overrides = _overrides()
+    if overrides:
+        for module in modules:
+            module.items = [i for i in module.items if not _hidden_item(course_id, i)]
     return {"count": len(modules), "modules": [_dump(m) for m in modules]}
+
+
+def _hidden_item(course_id: int, item: ModuleItem) -> bool:
+    """Whether a module item links to content an override hides."""
+    rule = None
+    if item.type == "File" and item.content_id is not None:
+        rule = _overrides().for_file(course_id, item.content_id, item.title)
+    elif item.type == "Page":
+        rule = _overrides().for_page(course_id, item.page_url, item.title)
+    return rule is not None and rule.action == "hide"
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -696,7 +843,9 @@ def _preflight() -> None:
 
     try:
         Config.from_env()
-    except ConfigError as exc:
+        # A broken overrides file would otherwise put every stale item back.
+        _overrides()
+    except (ConfigError, OverridesError) as exc:
         raise SystemExit(f"\ncanvas-viewer-mcp cannot start.\n\n  {exc}\n") from None
 
 

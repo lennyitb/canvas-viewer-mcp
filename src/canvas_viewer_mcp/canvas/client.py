@@ -56,6 +56,11 @@ class CanvasClient:
             transport=transport,
         )
 
+    @property
+    def web_url(self) -> str:
+        """The Canvas host as a browser sees it, for building links."""
+        return self._config.base_url
+
     async def __aenter__(self) -> CanvasClient:
         return self
 

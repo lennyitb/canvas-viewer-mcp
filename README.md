@@ -222,7 +222,7 @@ Everything below is for people who want to know how it works. You don't need
 any of it to use Canvas Viewer.
 
 Canvas Viewer is a read-only [MCP](https://modelcontextprotocol.io) server with
-thirteen tools. The hosted form runs in a container behind a single-user OAuth
+fourteen tools. The hosted form runs in a container behind a single-user OAuth
 2.1 login. [PLAN.md](PLAN.md) describes how it was built.
 
 ### Design
@@ -251,6 +251,7 @@ interpreting.
 | `list_discussion_participation` | Every graded discussion with the reply requirement and the user's post counts, in one call |
 | `list_files` / `read_course_file` | Course files, and text extracted from one |
 | `list_pages` / `get_page` | Wiki pages, and one page's body |
+| `get_syllabus` | The course's Syllabus tab |
 | `list_modules` | Modules and their items, in instructor-intended order |
 
 Course tabs are often disabled, and Canvas reports that as an error instead of
@@ -338,6 +339,60 @@ already issued.
 The connector password only controls who may authorize a connection. The
 Canvas token is what reads your account, which is why deleting the token in
 Canvas is the way to cut access.
+
+### Overrides
+
+Sometimes Canvas is wrong and stays wrong: a revised syllabus handed out in
+class that never reached the Syllabus tab, or library files the instructor has
+since replaced. An overrides file fixes that one item at a time. Each entry
+either hides an item, so the tools act as if Canvas had refused it, or serves a
+local file in its place. The replacement has the same shape Canvas content
+would, with nothing marking it as an override.
+
+The file is `overrides.toml` beside `config.toml`, or wherever
+`CANVAS_OVERRIDES_FILE` points. With docker compose it is
+`overrides/overrides.toml` next to `compose.yaml`. Paths in `with` are relative
+to the file's own folder.
+
+```toml
+# The Syllabus tab of course 12345, replaced by a local PDF (or .md, .txt).
+[[override]]
+course = 12345
+kind = "syllabus"
+with = "syllabus-rev2.pdf"
+
+# One course file, by id, replaced by a local copy.
+[[override]]
+course = 67890
+kind = "file"
+id = 555
+with = "lib/uart.c"
+
+# Every file in the course whose name matches, hidden.
+[[override]]
+course = 67890
+kind = "file"
+name = "stm32_hal_v1*.h"
+action = "hide"
+
+# A wiki page, by slug (or `title = "..."` glob).
+[[override]]
+course = 67890
+kind = "page"
+url = "week-3-notes"
+with = "week3.md"
+```
+
+Hidden files and pages also drop out of `list_modules`. Edits apply without a
+restart, and an edit that doesn't parse keeps the previous set. Since the
+tools give no sign of an override, check what each rule matched with:
+
+```bash
+canvas-probe overrides
+```
+
+It prints every rule, the Canvas item it matched (or `MATCHED NOTHING`), and
+whether the replacement file can be read.
 
 ## License
 
