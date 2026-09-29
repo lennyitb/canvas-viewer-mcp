@@ -45,7 +45,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal
 
-from .canvas.files import DOCX_TYPE, extract_text
+from .canvas.files import DOCX_TYPE, PPTX_TYPE, XLSX_TYPE, extract_text
 from .config import _config_file_path
 
 Kind = Literal["syllabus", "file", "page"]
@@ -56,6 +56,8 @@ KINDS: tuple[str, ...] = ("syllabus", "file", "page")
 # and on 3.11 it knows .docx only when the host has /etc/mime.types.
 _SUFFIX_TYPES = {
     ".docx": DOCX_TYPE,
+    ".pptx": PPTX_TYPE,
+    ".xlsx": XLSX_TYPE,
     ".md": "text/markdown",
     ".markdown": "text/markdown",
     ".c": "text/x-c",

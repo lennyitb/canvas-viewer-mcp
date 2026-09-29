@@ -33,6 +33,8 @@ _WHITESPACE = re.compile(r"\s+")
 
 
 class FeedbackAttachment(BaseModel):
+    # A Canvas file id, which `read_course_file` and `download_course_file` take.
+    id: int | None = None
     display_name: str | None = None
     content_type: str | None = None
     url: str | None = None
@@ -93,6 +95,7 @@ def flatten_comment(raw: JsonObject, my_id: int | None) -> FeedbackComment:
         comment=_cap(raw.get("comment")),
         attachments=[
             FeedbackAttachment(
+                id=a.get("id"),
                 display_name=a.get("display_name"),
                 content_type=a.get("content-type") or a.get("content_type"),
                 url=a.get("url"),

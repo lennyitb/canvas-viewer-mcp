@@ -223,7 +223,9 @@ async def test_list_files_hides_and_rewrites_without_leaking_the_old_url(odir: P
     assert by_id[1]["display_name"] == "uart.c"
     assert by_id[1]["size"] == len("// new uart driver\n")
     assert "url" not in by_id[1]
-    assert by_id[3]["url"].endswith("verifier=z"), "untouched files keep their link"
+    # No row carries the link any more; download_course_file hands it out.
+    assert "url" not in by_id[3]
+    assert by_id[3]["display_name"] == FILES[2]["display_name"]
 
 
 @respx.mock
@@ -239,6 +241,66 @@ async def test_read_course_file_serves_the_local_copy_without_downloading(odir: 
     assert result["text"] == "// new uart driver\n"
     assert result["display_name"] == "uart.c"
     assert not download.called
+
+
+@respx.mock
+async def test_read_course_file_gives_no_link_to_a_replaced_file(odir: Path) -> None:
+    _write(odir, MICRO_RULES, **{"lib/uart.c": "// new uart driver\n"})
+    respx.get(f"{API}/files/1").mock(return_value=httpx.Response(200, json=FILES[0]))
+
+    result = await _call("read_course_file", {"file_id": 1})
+
+    assert result["download_url"] is None
+
+
+async def _download(file_id: int) -> Any:
+    async with Client(server.mcp) as c:
+        return (await c.call_tool("download_course_file", {"file_id": file_id})).structured_content
+
+
+@respx.mock
+async def test_download_honours_hide_and_replace(odir: Path) -> None:
+    _write(odir, MICRO_RULES, **{"lib/uart.c": "// new uart driver\n"})
+    for f in FILES:
+        respx.get(f"{API}/files/{f['id']}").mock(return_value=httpx.Response(200, json=f))
+
+    replaced, hidden, untouched = [await _download(i) for i in (1, 2, 3)]
+
+    assert "download_url" not in replaced, "the Canvas link leads back to the old file"
+    assert "read_course_file" in replaced["note"]
+    assert hidden["unavailable"] is True
+    assert untouched["download_url"].endswith("verifier=z")
+
+
+@respx.mock
+async def test_hidden_files_leave_no_trail_in_links_or_the_rebuilt_list(odir: Path) -> None:
+    _write(odir, MICRO_RULES, **{"lib/uart.c": "// new uart driver\n"})
+    respx.get(f"{API}/courses").mock(return_value=httpx.Response(200, json=COURSES))
+    body = (
+        '<a href="/courses/7/files/2" title="hal_v1.h">HAL</a>'
+        '<a href="/courses/7/files/1" title="uart.c">UART</a>'
+    )
+    respx.get(f"{API}/courses/7/pages/week-1").mock(
+        return_value=httpx.Response(200, json={"url": "week-1", "title": "Week 1", "body": body})
+    )
+    respx.get(f"{API}/courses/7/files").mock(return_value=httpx.Response(403, text="{}"))
+    respx.get(f"{API}/courses/7/modules").mock(return_value=httpx.Response(200, json=[]))
+    respx.get(f"{API}/courses/7").mock(return_value=httpx.Response(200, json={"id": 7}))
+    respx.get(f"{API}/courses/7/front_page").mock(return_value=httpx.Response(404, text="{}"))
+    respx.get(f"{API}/courses/7/assignments").mock(return_value=httpx.Response(200, json=[]))
+    respx.get(f"{API}/courses/7/pages").mock(
+        return_value=httpx.Response(200, json=[{"title": "Week 1", "body": body}])
+    )
+    respx.get(f"{API}/courses/7/discussion_topics").mock(return_value=httpx.Response(200, json=[]))
+    respx.get(url__startswith=f"{API}/announcements").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    page = await _call("get_page", {"course_id": 7, "page_url": "week-1"})
+    listing = await _call("list_files", {"course_id": 7})
+
+    assert page["linked_files"] == [{"id": 1, "name": "uart.c"}]
+    assert [f["id"] for f in listing["files"]] == [1]
 
 
 def test_docx_type_does_not_depend_on_the_host_mime_table() -> None:

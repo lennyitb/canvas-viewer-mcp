@@ -30,7 +30,7 @@ from pydantic import BaseModel
 
 from .client import CanvasClient
 from .errors import CanvasError
-from .html_text import html_to_markdown
+from .html_text import LinkedFile, html_to_markdown, linked_files
 
 JsonObject = dict[str, Any]
 
@@ -51,6 +51,8 @@ class DiscussionTopic(BaseModel):
     assignment_id: int | None = None
     html_url: str | None = None
     message: str | None = None
+    # Files the message links to or the topic attaches; set with the message.
+    linked_files: list[LinkedFile] | None = None
 
 
 class DiscussionReply(BaseModel):
@@ -82,6 +84,8 @@ class Page(BaseModel):
     published: bool = True
     todo_date: str | None = None
     body: str | None = None
+    # Files the body links to or embeds; set only when the body is.
+    linked_files: list[LinkedFile] | None = None
 
 
 class ModuleItem(BaseModel):
@@ -89,7 +93,10 @@ class ModuleItem(BaseModel):
     title: str
     type: str | None = None
     position: int | None = None
+    # For a File item the id goes in ``file_id`` instead, under the name the
+    # file tools take, so nobody has to know that a File's content is a file.
     content_id: int | None = None
+    file_id: int | None = None
     page_url: str | None = None
     html_url: str | None = None
     completion_requirement: str | None = None
@@ -166,6 +173,18 @@ def _author_of(raw: JsonObject) -> str | None:
     return raw.get("user_name")
 
 
+def topic_files(raw: JsonObject) -> list[LinkedFile] | None:
+    """Files a topic's message links to, then those attached to the topic."""
+    found = {f.id: f for f in linked_files(raw.get("message")) or []}
+    for attachment in raw.get("attachments") or []:
+        if isinstance(attachment, dict) and isinstance(attachment.get("id"), int):
+            found.setdefault(
+                attachment["id"],
+                LinkedFile(id=attachment["id"], name=attachment.get("display_name")),
+            )
+    return list(found.values()) or None
+
+
 def flatten_topic(
     raw: JsonObject, *, course_id: int | None = None, include_message: bool = False
 ) -> DiscussionTopic:
@@ -185,6 +204,7 @@ def flatten_topic(
         assignment_id=raw.get("assignment_id"),
         html_url=raw.get("html_url") or raw.get("url"),
         message=html_to_markdown(raw.get("message")) if include_message else None,
+        linked_files=topic_files(raw) if include_message else None,
     )
 
 
@@ -211,6 +231,7 @@ def flatten_page(raw: JsonObject, *, include_body: bool = False) -> Page:
         published=bool(raw.get("published", True)),
         todo_date=raw.get("todo_date"),
         body=html_to_markdown(raw.get("body")) if include_body else None,
+        linked_files=linked_files(raw.get("body")) if include_body else None,
     )
 
 
@@ -218,13 +239,15 @@ def flatten_module(raw: JsonObject) -> Module:
     items = []
     for item in raw.get("items") or []:
         requirement = item.get("completion_requirement") or {}
+        is_file = item.get("type") == "File"
         items.append(
             ModuleItem(
                 id=item["id"],
                 title=item.get("title") or "(untitled)",
                 type=item.get("type"),
                 position=item.get("position"),
-                content_id=item.get("content_id"),
+                content_id=None if is_file else item.get("content_id"),
+                file_id=item.get("content_id") if is_file else None,
                 page_url=item.get("page_url"),
                 html_url=item.get("html_url"),
                 completion_requirement=requirement.get("type")

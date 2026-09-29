@@ -9,7 +9,19 @@ from __future__ import annotations
 import io
 import zipfile
 
-from canvas_viewer_mcp.canvas.files import DOCX_TYPE, MAX_EXTRACTED_CHARS, extract_text
+from openpyxl import Workbook
+from pptx import Presentation
+from pptx.util import Inches
+
+from canvas_viewer_mcp.canvas.files import (
+    DOCX_TYPE,
+    MAX_EXTRACTED_CHARS,
+    MAX_OOXML_INFLATED_BYTES,
+    MAX_SHEET_ROWS,
+    PPTX_TYPE,
+    XLSX_TYPE,
+    extract_text,
+)
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -159,10 +171,105 @@ def test_generic_type_falls_back_to_the_filename() -> None:
 
     text, note = extract_text(data, "application/octet-stream", "Lab3.bin")
     assert text is None
-    assert note is not None and "Word (.docx)" in note
+    assert note is not None and "Word" in note
+    assert "download_url" in note, "an unreadable file must point at the original"
 
 
 def test_legacy_doc_is_not_supported() -> None:
     text, note = extract_text(b"\xd0\xcf\x11\xe0", "application/msword", "old.doc")
     assert text is None
     assert note is not None and note.startswith("No text extractor for application/msword")
+
+
+# ---- PowerPoint and Excel ------------------------------------------------------
+
+
+def _pptx() -> bytes:
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[1])  # title and content
+    slide.shapes.title.text = "GPIO Basics"
+    body = slide.placeholders[1].text_frame
+    body.text = "Set the mode register"
+    sub = body.add_paragraph()
+    sub.text = "then write the ODR"
+    sub.level = 1
+    table = slide.shapes.add_table(2, 2, Inches(1), Inches(4), Inches(4), Inches(1)).table
+    for r, row in enumerate([["Pin", "Mode"], ["PA5", "Output"]]):
+        for c, value in enumerate(row):
+            table.cell(r, c).text = value
+    slide.notes_slide.notes_text_frame.text = "Demo on the Nucleo board."
+    deck.slides.add_slide(deck.slide_layouts[6])  # blank, and left out
+    buffer = io.BytesIO()
+    deck.save(buffer)
+    return buffer.getvalue()
+
+
+def _xlsx(rows: list[list[object]], title: str = "Prelab") -> bytes:
+    book = Workbook()
+    sheet = book.active
+    assert sheet is not None
+    sheet.title = title
+    for row in rows:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def test_pptx_keeps_slide_titles_bullets_tables_and_notes() -> None:
+    text, note = extract_text(_pptx(), PPTX_TYPE)
+
+    assert note is None
+    assert text is not None
+    assert text.startswith("## Slide 1: GPIO Basics")
+    assert text.count("GPIO Basics") == 1, "the title is the heading, not a line too"
+    assert "Set the mode register" in text
+    assert "  - then write the ODR" in text
+    assert "| Pin | Mode |" in text and "| PA5 | Output |" in text
+    assert "Notes: Demo on the Nucleo board." in text
+    assert "Slide 2" not in text, "an empty slide adds nothing"
+
+
+def test_xlsx_becomes_one_table_per_sheet() -> None:
+    data = _xlsx(
+        [["R (ohm)", "V", None], [1000, 4.7, None], [None, None, None], [2200, "a|b", None]]
+    )
+
+    text, note = extract_text(data, XLSX_TYPE)
+
+    assert note is None
+    assert text == ("## Prelab\n\n| R (ohm) | V |\n| --- | --- |\n| 1000 | 4.7 |\n| 2200 | a\\|b |")
+
+
+def test_long_sheet_is_cut_and_says_so() -> None:
+    text, note = extract_text(_xlsx([[i] for i in range(MAX_SHEET_ROWS + 50)]), XLSX_TYPE)
+
+    assert text is not None and f"| {MAX_SHEET_ROWS - 1} |" in text
+    assert f"| {MAX_SHEET_ROWS} |" not in text
+    assert note is not None and "Prelab" in note
+
+
+def test_office_files_labelled_generically_are_read_by_their_name() -> None:
+    text, _ = extract_text(_pptx(), "application/octet-stream", "Lecture.PPTX")
+    assert text is not None and "GPIO Basics" in text
+
+    text, _ = extract_text(_xlsx([["a"]]), "application/zip", "calcs.xlsx")
+    assert text is not None and "| a |" in text
+
+
+def test_office_zip_bomb_is_refused_before_parsing() -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("ppt/presentation.xml", b"\0" * (MAX_OOXML_INFLATED_BYTES + 1))
+
+    text, note = extract_text(buffer.getvalue(), PPTX_TYPE)
+
+    assert text is None
+    assert note is not None and "limit" in note
+
+
+def test_corrupt_pptx_and_xlsx_are_reported_not_raised() -> None:
+    for kind, label in ((PPTX_TYPE, "PowerPoint"), (XLSX_TYPE, "Excel")):
+        text, note = extract_text(b"not a zip at all", kind)
+        assert text is None
+        assert note is not None and note.startswith(f"Could not parse {label}")

@@ -23,7 +23,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from .client import CanvasClient
-from .html_text import html_to_markdown
+from .html_text import LinkedFile, html_to_markdown, linked_files
 
 JsonObject = dict[str, Any]
 
@@ -70,6 +70,8 @@ class Assignment(BaseModel):
     discussion_topic_id: int | None = None
 
     description: str | None = None
+    # Files the description links to; set only when the description is.
+    linked_files: list[LinkedFile] | None = None
     submission: Submission | None = None
 
 
@@ -120,6 +122,7 @@ def flatten_assignment(
         html_url=raw.get("html_url"),
         discussion_topic_id=topic.get("id") if isinstance(topic, dict) else None,
         description=html_to_markdown(raw.get("description")) if include_description else None,
+        linked_files=linked_files(raw.get("description")) if include_description else None,
         submission=flatten_submission(raw.get("submission")),
     )
 

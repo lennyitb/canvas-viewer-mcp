@@ -222,7 +222,7 @@ Everything below is for people who want to know how it works. You don't need
 any of it to use Canvas Viewer.
 
 Canvas Viewer is a read-only [MCP](https://modelcontextprotocol.io) server with
-fourteen tools. The hosted form runs in a container behind a single-user OAuth
+fifteen tools. The hosted form runs in a container behind a single-user OAuth
 2.1 login. [PLAN.md](PLAN.md) describes how it was built.
 
 ### Design
@@ -249,7 +249,9 @@ interpreting.
 | `list_announcements` | Recent announcements across all courses, with text (or titles only) |
 | `list_discussions` / `get_discussion` | Topics, and one topic with the user's own participation counted; the reply tree on request |
 | `list_discussion_participation` | Every graded discussion with the reply requirement and the user's post counts, in one call |
-| `list_files` / `read_course_file` | Course files, and text extracted from one (PDF, Word .docx, text) |
+| `list_files` | Course files; in a course that hides its Files tab, the files its content links to |
+| `read_course_file` | Text extracted from one file (PDF, Word, PowerPoint, Excel, text) |
+| `download_course_file` | A download link for one file of any type, and small images shown inline |
 | `list_pages` / `get_page` | Wiki pages, and one page's body |
 | `get_syllabus` | The course's Syllabus tab |
 | `list_modules` | Modules and their items, in instructor-intended order |
@@ -284,6 +286,31 @@ are always nested. On one topic it returned 22 of 77 entries. The server reads
 the full thread view, and reports `full_thread: false` when Canvas could only
 give it the top level.
 
+### Files
+
+Instructors often hide the Files tab, and Canvas then refuses the file list
+with a 403. The files themselves stay readable by id to anyone enrolled; only
+the list is gone. On one real account that was two courses of five, one of
+them with its syllabus posted only as a linked `.docx`.
+
+How the tools surface this:
+
+- `list_files` in such a course rebuilds the list from what the course links
+  to: module items, the syllabus, the front page, assignments, pages (read one
+  by one from the modules if the Pages tab is hidden too), discussions and
+  announcements. Each row says where it was found in `linked_from`, and the
+  result says it may be incomplete.
+- Module items of type File carry a `file_id`, and `get_page`, `get_syllabus`,
+  `get_assignment`, `get_discussion` and `list_announcements` carry the
+  `linked_files` in their bodies, named from the link's title where the editor
+  writes the real filename.
+- `download_course_file` returns the file's own pre-signed Canvas link, which
+  works without signing in, so the user can open it or a shell can fetch it.
+  Images under 3.75 MB also come back inline for the model to look at.
+- `read_course_file` returns the same `download_url` alongside the text, so a
+  file it cannot read (an archive, source code in an unknown type) still leads
+  somewhere.
+
 ### Response size
 
 Everything these tools return lands in a model's context window, so lists are
@@ -297,6 +324,9 @@ lean and detail is opt-in:
 - `list_feedback` returns only recently graded or commented work, and leaves
   out the user's own comments unless asked. Comments are capped at 2k
   characters with a visible truncation marker.
+- `list_files` rows omit the download link, the stored filename and the
+  folder; on a 97-file course that is 17k characters instead of 39k.
+  `download_course_file` gives the link for the one file wanted.
 - `list_discussion_participation` replaces a `list_assignments` sweep followed
   by `get_assignment` and `get_discussion` per discussion. On a course with 20
   graded discussions that is roughly 14k characters in place of 765k.

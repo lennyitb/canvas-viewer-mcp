@@ -220,6 +220,40 @@ carries, and until now the server dropped it along with every rubric mark.
       ("Comprehension\n(Relevance of\nPost)"); found live, now collapsed
 - [ ] The same, through the deployed connector in claude.ai
 
+## Stage 10 — Files you can actually get
+
+Getting a whole file, rather than its text, meant calling `list_files`,
+copying the `url` off a row and fetching it. No tool said "download", so a
+model rarely thought to, and the route failed outright in any course hiding
+its Files tab -- Linear Algebra and US History on the real account. Yet
+`files/:id` answered in both: the Linear Algebra syllabus through its module
+item, the History syllabus through a link on the Syllabus tab. Only the list
+was blocked.
+
+- [x] `linked_files()`: file ids lifted from HTML links and embeds, named from
+      the `title` attribute where the editor writes the real filename
+- [x] `linked_files` on pages, the syllabus, assignments, discussions and
+      announcements; `file_id` on module File items; `id` on feedback files;
+      hidden overrides filtered out of all of them
+- [x] `list_files` on a hidden tab rebuilds the list from modules, syllabus,
+      front page, assignments, pages (one by one from the modules when the
+      Pages tab is hidden too), discussions and announcements, each row with
+      `linked_from`
+- [x] `download_course_file`: the pre-signed link for any file, lock dates for
+      locked ones, and images under 3.75 MB inline
+- [x] `read_course_file` carries `download_url`, and a file it cannot read
+      points at it instead of stopping
+- [x] `list_files` rows lose the link, filename, created date and folder
+- [x] PowerPoint and Excel text, behind a zip-bomb guard shared with Word
+- [x] Checkpoint: live against the real account, in process.
+      `list_files(68894)` found the History syllabus `.docx` on the Syllabus
+      tab and `list_files(69008)` the Linear Algebra one in a module; the
+      `.pptx` link from `download_course_file` fetched 2,652,719 bytes, exactly
+      the size Canvas reports; a 97-file listing went from 39k characters
+      to 17k
+- [ ] The same, through the deployed connector in claude.ai, including a fresh
+      chat asked to "download the History syllabus"
+
 ## Running concern — response size
 Tool results consume model context and mobile latency. List tools return
 summaries plus IDs; detail is fetched on request. Bodies are converted to

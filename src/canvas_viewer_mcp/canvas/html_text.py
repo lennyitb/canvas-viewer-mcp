@@ -9,8 +9,11 @@ is mostly noise, and noise costs context window and mobile latency.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
+from bs4 import BeautifulSoup
 from markdownify import markdownify
+from pydantic import BaseModel
 
 DEFAULT_MAX_CHARS = 8000
 TRUNCATION_NOTE = "\n\n[... truncated, {removed} more characters ...]"
@@ -25,6 +28,11 @@ _WHITESPACE = re.compile(r"\s+")
 # classmates must be answered and by when. Matched as prefixes, so "reply",
 # "replies", "respond", "responses", "peers" and "classmates" all hit.
 REPLY_KEYWORDS = ("repl", "respon", "peer", "classmate", "comment on")
+
+# The path of a link to one Canvas file, in every form the editor writes one:
+# /courses/1/files/2?wrap=1, /files/2/download, /api/v1/courses/1/files/2,
+# /users/3/files/2/preview. Only the path is matched; the host varies.
+_FILE_PATH = re.compile(r"^(?:/api/v1)?(?:/(?:courses|users|groups)/\d+)?/files/(\d+)(?:/|$)")
 
 
 def html_to_markdown(html: str | None, *, max_chars: int = DEFAULT_MAX_CHARS) -> str | None:
@@ -78,3 +86,55 @@ def excerpt_sentences(
     if len(joined) > max_chars:
         joined = joined[:max_chars].rstrip() + " [...]"
     return joined
+
+
+class LinkedFile(BaseModel):
+    """A Canvas file that a body of HTML links to or embeds."""
+
+    id: int
+    name: str | None = None
+
+
+def linked_files(html: str | None) -> list[LinkedFile] | None:
+    """The Canvas files ``html`` links to or embeds, in order, or None if none.
+
+    A course that hides its Files tab refuses the file list, but the files
+    themselves stay readable by id -- and the ids sit in the links the
+    instructor put in the syllabus, pages and assignments. Converted to
+    Markdown those links still carry the id, but only buried in a URL, which
+    a reader easily takes for a page to visit rather than a file to fetch.
+    This lifts them out.
+
+    The ``title`` attribute is preferred for the name: the rich-content
+    editor writes the file's real name there, while the link text is
+    whatever the instructor typed.
+    """
+    if not html or "files/" not in html:
+        return None
+
+    found: dict[int, LinkedFile] = {}
+    for tag in BeautifulSoup(html, "lxml").find_all(["a", "img", "iframe"]):
+        for attr in ("href", "src", "data-api-endpoint"):
+            value = tag.get(attr)
+            if not isinstance(value, str):
+                continue
+            match = _FILE_PATH.match(urlsplit(value.strip()).path)
+            if match is None:
+                continue
+            file_id = int(match.group(1))
+            name = next(
+                (
+                    n.strip()
+                    for n in (tag.get("title"), tag.get("alt"), tag.get_text())
+                    if isinstance(n, str) and n.strip()
+                ),
+                None,
+            )
+            existing = found.get(file_id)
+            if existing is None:
+                found[file_id] = LinkedFile(id=file_id, name=name)
+            elif existing.name is None:
+                existing.name = name
+            break
+
+    return list(found.values()) or None

@@ -59,10 +59,14 @@ def _assignment(aid: int, course_id: int) -> dict[str, Any]:
 
 
 @respx.mock
-async def test_disabled_files_tab_reports_unavailable_instead_of_raising() -> None:
+async def test_disabled_files_tab_with_nothing_linked_reports_unavailable() -> None:
     _mock_courses()
-    respx.get(f"{API}/courses/2/files").mock(
+    # Files hidden, and every source the list could be rebuilt from refused too.
+    respx.get(url__regex=rf"^{API}/courses/2(/|\?)").mock(
         return_value=httpx.Response(403, text='{"status":"unauthorized"}')
+    )
+    respx.get(url__startswith=f"{API}/announcements").mock(
+        return_value=httpx.Response(200, json=[])
     )
 
     async with Client(server.mcp) as c:
@@ -70,6 +74,7 @@ async def test_disabled_files_tab_reports_unavailable_instead_of_raising() -> No
 
     assert result["unavailable"] is True
     assert "disabled or hidden" in result["reason"]
+    assert "file_id" in result["hint"]
 
 
 @respx.mock
@@ -297,6 +302,7 @@ async def test_every_tool_is_registered() -> None:
         "list_discussion_participation",
         "list_files",
         "read_course_file",
+        "download_course_file",
         "list_pages",
         "get_page",
         "list_modules",
@@ -577,3 +583,292 @@ async def test_list_feedback_sweeps_past_a_locked_course_and_hides_own_comments(
 
     own = with_own["feedback"][0]["comments"]
     assert [(c["comment"], c["mine"]) for c in own] == [("Mine", True), ("See me", False)]
+
+
+# ---- file downloads ----------------------------------------------------------
+
+PNG_1PX = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+)
+
+
+def _file(fid: int, name: str, kind: str, size: int, **extra: Any) -> dict[str, Any]:
+    return {
+        "id": fid,
+        "display_name": name,
+        "filename": name,
+        "content-type": kind,
+        "size": size,
+        "created_at": "2026-08-24T00:00:00Z",
+        "updated_at": "2026-08-25T00:00:00Z",
+        "folder_id": 99,
+        "url": f"{BASE}/files/{fid}/download?download_frd=1&verifier=v{fid}",
+        **extra,
+    }
+
+
+@respx.mock
+async def test_download_hands_out_the_link_without_fetching_the_file() -> None:
+    respx.get(f"{API}/files/5").mock(
+        return_value=httpx.Response(200, json=_file(5, "Lecture.pptx", "application/x-pptx", 900))
+    )
+    blob = respx.get(f"{BASE}/files/5/download")
+
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("download_course_file", {"file_id": 5})
+
+    row = result.structured_content
+    assert row is not None
+    assert row["download_url"].endswith("verifier=v5")
+    assert "curl -L -o" in row["how_to"]
+    assert row["display_name"] == "Lecture.pptx"
+    assert not blob.called
+    assert all(block.type == "text" for block in result.content)
+
+
+@respx.mock
+async def test_download_shows_a_small_image_inline() -> None:
+    respx.get(f"{API}/files/6").mock(
+        return_value=httpx.Response(200, json=_file(6, "pinout.png", "image/png", len(PNG_1PX)))
+    )
+    respx.get(f"{BASE}/files/6/download").mock(return_value=httpx.Response(200, content=PNG_1PX))
+
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("download_course_file", {"file_id": 6})
+
+    kinds = [block.type for block in result.content]
+    assert kinds == ["text", "image"]
+    assert result.content[1].mime_type == "image/png"
+    assert result.structured_content is not None
+    assert result.structured_content["download_url"].endswith("verifier=v6")
+
+
+@respx.mock
+async def test_download_does_not_fetch_an_image_too_large_to_show() -> None:
+    size = server.INLINE_IMAGE_MAX_BYTES + 1
+    respx.get(f"{API}/files/7").mock(
+        return_value=httpx.Response(200, json=_file(7, "board.png", "image/png", size))
+    )
+    blob = respx.get(f"{BASE}/files/7/download")
+
+    async with Client(server.mcp) as c:
+        result = await c.call_tool("download_course_file", {"file_id": 7})
+
+    assert not blob.called
+    assert [block.type for block in result.content] == ["text"]
+    assert result.structured_content is not None
+    assert "Too large" in result.structured_content["note"]
+    assert result.structured_content["download_url"]
+
+
+@respx.mock
+async def test_download_of_a_locked_file_says_when_it_opens() -> None:
+    locked = _file(8, "Week 9.pdf", "application/pdf", 10, url="", locked_for_user=True)
+    locked["unlock_at"] = "2026-10-19T04:00:00Z"
+    respx.get(f"{API}/files/8").mock(return_value=httpx.Response(200, json=locked))
+
+    async with Client(server.mcp) as c:
+        row = (await c.call_tool("download_course_file", {"file_id": 8})).structured_content
+
+    assert row is not None
+    assert row["locked"] is True
+    assert row["unlock_at"] == "2026-10-19T04:00:00Z"
+    assert "2026-10-19" in row["note"]
+    assert "download_url" not in row
+
+
+@respx.mock
+async def test_read_course_file_points_at_the_original_when_it_has_no_text() -> None:
+    respx.get(f"{API}/files/9").mock(
+        return_value=httpx.Response(200, json=_file(9, "lib.zip", "application/zip", 4))
+    )
+    respx.get(f"{BASE}/files/9/download").mock(
+        return_value=httpx.Response(200, content=b"PK\x03\x04")
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("read_course_file", {"file_id": 9})).data
+
+    assert result["text"] is None
+    assert result["download_url"].endswith("verifier=v9")
+    assert "download_url" in result["note"]
+
+
+@respx.mock
+async def test_file_rows_leave_out_the_link_and_other_bulk() -> None:
+    respx.get(f"{API}/courses/1/files").mock(
+        return_value=httpx.Response(200, json=[_file(5, "a.pdf", "application/pdf", 10)])
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_files", {"course_id": 1})).data
+
+    assert result["files"] == [
+        {
+            "id": 5,
+            "display_name": "a.pdf",
+            "content_type": "application/pdf",
+            "size": 10,
+            "updated_at": "2026-08-25T00:00:00Z",
+            "locked": False,
+        }
+    ]
+
+
+def _mock_hidden_files_course(course_id: int) -> None:
+    """A course like Linear Algebra or US History: Files and Pages refused,
+    the files still linked from modules, the syllabus and assignments."""
+    base = f"{API}/courses/{course_id}"
+    respx.get(f"{base}/files").mock(return_value=httpx.Response(403, text="{}"))
+    respx.get(f"{base}/modules").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "name": "Welcome",
+                    "items": [
+                        {"id": 10, "title": "Syllabus.docx", "type": "File", "content_id": 500},
+                        {"id": 11, "title": "Week 1", "type": "Page", "page_url": "week-1"},
+                    ],
+                }
+            ],
+        )
+    )
+    respx.get(base, params={"include[]": "syllabus_body"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": course_id,
+                "syllabus_body": '<a href="/courses/9/files/500?wrap=1" title="Full.docx">here</a>',
+            },
+        )
+    )
+    respx.get(f"{base}/front_page").mock(return_value=httpx.Response(404, text="{}"))
+    respx.get(f"{base}/assignments").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 3,
+                    "name": "Project 1",
+                    "description": '<a href="/courses/9/files/501/download">data.xlsx</a>',
+                }
+            ],
+        )
+    )
+    respx.get(f"{base}/pages").mock(return_value=httpx.Response(404, text="{}"))
+    respx.get(f"{base}/pages/week-1").mock(
+        return_value=httpx.Response(
+            200,
+            json={"title": "Week 1", "body": '<img src="/courses/9/files/502/x" alt="a.png">'},
+        )
+    )
+    respx.get(f"{base}/discussion_topics").mock(
+        return_value=httpx.Response(403, text='{"status":"unauthorized"}')
+    )
+    respx.get(url__startswith=f"{API}/announcements").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 4,
+                    "title": "Updated handout",
+                    "message": "<p>See attached.</p>",
+                    "attachments": [{"id": 503, "display_name": "handout-v2.pdf"}],
+                }
+            ],
+        )
+    )
+
+
+@respx.mock
+async def test_hidden_files_tab_lists_the_files_the_course_links_to() -> None:
+    _mock_courses()
+    _mock_hidden_files_course(9)
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_files", {"course_id": 9})).data
+
+    assert result["files_tab_hidden"] is True
+    assert "read_course_file" in result["note"]
+    assert result["sources_unavailable"] == ["discussions"]
+    by_id = {f["id"]: f for f in result["files"]}
+    assert list(by_id) == [500, 501, 502, 503]
+    # The module's label wins, and every place the file is linked is kept.
+    assert by_id[500] == {
+        "id": 500,
+        "display_name": "Syllabus.docx",
+        "linked_from": ["module: Welcome", "syllabus"],
+    }
+    assert by_id[501]["linked_from"] == ["assignment: Project 1"]
+    # Pages were hidden too, so the module's page was read on its own.
+    assert by_id[502] == {"id": 502, "display_name": "a.png", "linked_from": ["page: Week 1"]}
+    assert by_id[503]["display_name"] == "handout-v2.pdf"
+
+
+@respx.mock
+async def test_content_tools_carry_the_files_they_link_to() -> None:
+    _mock_courses()
+    body = '<p><a href="/courses/1/files/77" title="lab.pdf">Lab</a></p>'
+    respx.get(f"{API}/courses/1/pages/week-1").mock(
+        return_value=httpx.Response(200, json={"url": "week-1", "title": "Week 1", "body": body})
+    )
+    respx.get(f"{API}/courses/1/pages").mock(
+        return_value=httpx.Response(200, json=[{"url": "week-1", "title": "Week 1"}])
+    )
+    respx.get(f"{API}/courses/1", params={"include[]": "syllabus_body"}).mock(
+        return_value=httpx.Response(200, json={"id": 1, "name": "Open", "syllabus_body": body})
+    )
+    respx.get(f"{API}/courses/1/assignments/5").mock(
+        return_value=httpx.Response(200, json={**_assignment(5, 1), "description": body})
+    )
+    respx.get(f"{API}/courses/1/assignments").mock(
+        return_value=httpx.Response(200, json=[{**_assignment(5, 1), "description": body}])
+    )
+
+    async with Client(server.mcp) as c:
+        page = (await c.call_tool("get_page", {"course_id": 1, "page_url": "week-1"})).data
+        syllabus = (await c.call_tool("get_syllabus", {"course_id": 1})).data
+        assignment = (
+            await c.call_tool(
+                "get_assignment", {"course_id": 1, "assignment_id": 5, "include_feedback": False}
+            )
+        ).data
+        pages = (await c.call_tool("list_pages", {"course_id": 1})).data
+        assignments = (await c.call_tool("list_assignments", {"course_id": 1})).data
+
+    expected = [{"id": 77, "name": "lab.pdf"}]
+    assert page["linked_files"] == expected
+    assert syllabus["linked_files"] == expected
+    assert assignment["linked_files"] == expected
+    # Lists carry no bodies, so they carry no links either.
+    assert "linked_files" not in pages["pages"][0]
+    assert "linked_files" not in assignments["assignments"][0]
+
+
+@respx.mock
+async def test_module_file_items_carry_a_file_id() -> None:
+    respx.get(f"{API}/courses/1/modules").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 1,
+                    "name": "Week 1",
+                    "items": [
+                        {"id": 10, "title": "Notes.pdf", "type": "File", "content_id": 500},
+                        {"id": 11, "title": "Quiz 1", "type": "Quiz", "content_id": 600},
+                    ],
+                }
+            ],
+        )
+    )
+
+    async with Client(server.mcp) as c:
+        result = (await c.call_tool("list_modules", {"course_id": 1})).data
+
+    file_item, quiz_item = result["modules"][0]["items"]
+    assert file_item["file_id"] == 500 and "content_id" not in file_item
+    assert quiz_item["content_id"] == 600 and "file_id" not in quiz_item

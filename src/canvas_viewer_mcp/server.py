@@ -26,12 +26,15 @@ project exists to surface and an absent key is too easy to read past.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastmcp import FastMCP
+from fastmcp.tools import ToolResult
+from fastmcp.utilities.types import Image
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -49,10 +52,24 @@ from .canvas.content import (
     fetch_thread,
     summarise_participation,
 )
+from .canvas.discovery import discover_linked_files
 from .canvas.errors import CanvasAuthError, CanvasError, CanvasNotFoundError
 from .canvas.feedback import fetch_feedback, fetch_recent_feedback
-from .canvas.files import ExtractedFile, fetch_file_meta, fetch_files, read_file
-from .canvas.html_text import REPLY_KEYWORDS, excerpt_sentences, html_to_markdown
+from .canvas.files import (
+    ExtractedFile,
+    download,
+    fetch_file_meta,
+    fetch_files,
+    read_file,
+    unavailable_note,
+)
+from .canvas.html_text import (
+    REPLY_KEYWORDS,
+    LinkedFile,
+    excerpt_sentences,
+    html_to_markdown,
+    linked_files,
+)
 from .config import Config
 from .overrides import Override, OverridesError, load_replacement
 from .overrides import current as _overrides
@@ -86,6 +103,14 @@ graded or commented on recently. Comments sometimes carry work the grade does
 not show: a resubmission offer, a revision deadline, a request to meet. A
 `posted_at` of null means grades are not yet released and some feedback may
 still be hidden from the user.
+
+Course files -- handouts, lab sheets, starter code, slides, syllabi -- are
+reachable by id even in courses that hide the Files tab. Ids come from
+`list_files`, from module items (`file_id`), and from the `linked_files` that
+pages, the syllabus, assignments, discussions and announcements carry.
+`read_course_file` returns a file's text (PDF, Word, PowerPoint, Excel, plain
+text); `download_course_file` returns a link to the original file of any type,
+to hand to the user or fetch with a shell, and shows images directly.
 
 These tools report what Canvas holds and classify nothing. When the real
 deadline matters, read the assignment body, the course announcements, the
@@ -198,6 +223,29 @@ async def _self() -> dict[str, Any] | None:
 def _hidden() -> dict[str, Any]:
     """What a hidden item looks like: exactly what Canvas refusing it would."""
     return _unavailable(CanvasNotFoundError())
+
+
+def _visible_links(
+    course_id: int | None, links: list[LinkedFile] | None
+) -> list[LinkedFile] | None:
+    """``links`` without the files an override hides.
+
+    A hidden file has to vanish from the links as well as from the file
+    list, or the id that leads straight back to it is handed out anyway.
+    A replaced file stays: the file tools serve the local copy by that id.
+    """
+    if not links:
+        return None
+    overrides = _overrides()
+    if not overrides:
+        return links
+    kept = [
+        link
+        for link in links
+        if (rule := overrides.for_file(course_id, link.id, link.name)) is None
+        or rule.action != "hide"
+    ]
+    return kept or None
 
 
 def _override_failed(exc: OverridesError) -> dict[str, Any]:
@@ -319,6 +367,7 @@ async def get_assignment(
     assignment = flatten_assignment(
         raw, course_name=course.get("name") if course else None, include_description=True
     )
+    assignment.linked_files = _visible_links(course_id, assignment.linked_files)
     row = assignment.model_dump()
     if _is_discussion(row):
         row["completion_caveat"] = DISCUSSION_CAVEAT
@@ -401,10 +450,10 @@ async def get_syllabus(course_id: int) -> dict[str, Any]:
     """Fetch a course's Syllabus tab, the body shown at /assignments/syllabus.
 
     Syllabi often carry the schedule, the grading breakdown, and deadline
-    policy that assignment metadata leaves out. Many courses leave this tab
-    empty and post the syllabus as a file or page instead; `body` is then
-    absent and `list_files`, `list_pages`, or `list_modules` are the next place
-    to look.
+    policy that assignment metadata leaves out. Many courses post the syllabus
+    as a file instead, often linked from this tab: `linked_files` names it,
+    and `read_course_file` reads it. When the tab is empty, `list_modules` and
+    `list_files` are the next place to look.
     """
     client = await get_client()
     rule = _overrides().for_syllabus(course_id)
@@ -415,6 +464,7 @@ async def get_syllabus(course_id: int) -> dict[str, Any]:
     except (CanvasAuthError, CanvasNotFoundError) as exc:
         return _unavailable(exc)
 
+    links: list[LinkedFile] | None = None
     if rule is not None:
         try:
             body = load_replacement(rule).text
@@ -422,12 +472,14 @@ async def get_syllabus(course_id: int) -> dict[str, Any]:
             return _override_failed(exc)
     else:
         body = html_to_markdown(raw.get("syllabus_body"))
+        links = _visible_links(course_id, linked_files(raw.get("syllabus_body")))
 
     row: dict[str, Any] = {
         "course_id": course_id,
         "course_name": raw.get("name"),
         "html_url": f"{client.web_url}/courses/{course_id}/assignments/syllabus",
         "body": body or None,
+        "linked_files": [f.model_dump() for f in links] if links else None,
     }
     if not body:
         row["note"] = "The Syllabus tab is empty in this course."
@@ -456,6 +508,8 @@ async def list_announcements(
     topics = await fetch_announcements(
         client, course_ids, start_date=start, include_messages=include_messages
     )
+    for topic in topics:
+        topic.linked_files = _visible_links(topic.course_id, topic.linked_files)
     return {
         "count": len(topics),
         "since": start,
@@ -506,6 +560,7 @@ async def get_discussion(
 
     me = await _self()
     my_id = me.get("id") if me else None
+    topic.linked_files = _visible_links(course_id, topic.linked_files)
 
     result: dict[str, Any] = {
         "topic": _dump(topic),
@@ -630,21 +685,47 @@ async def list_discussion_participation(course_id: int | None = None) -> dict[st
 # ---- files, pages, modules ---------------------------------------------------
 
 
+# A listing of a hundred files is mostly these: the download URL alone is a
+# third of each row. `download_course_file` hands out the URL for one file.
+FILE_ROW_DROP = ("url", "filename", "created_at", "folder_id")
+
+
+LINKED_FILES_NOTE = (
+    "This course hides its Files tab, so these are the files its content links "
+    "to: module items, the syllabus, the front page, assignments, pages, "
+    "discussions and announcements. A file linked from nowhere is missing here, "
+    "and a link can outlive its file. `read_course_file` and "
+    "`download_course_file` work on these ids."
+)
+
+FILES_HIDDEN_HINT = (
+    "Individual files are still readable by id: look for module items with a "
+    "`file_id`, and for `linked_files` on the syllabus, pages, assignments, "
+    "discussions and announcements."
+)
+
+
 @mcp.tool
 async def list_files(course_id: int) -> dict[str, Any]:
-    """List a course's files. Many courses hide the Files tab from students."""
+    """List a course's files, including in courses that hide the Files tab.
+
+    When the Files tab is hidden, the list is rebuilt from the files the
+    course's content links to, with `linked_from` saying where each was found.
+    Rows carry no download link; `download_course_file` gives one, and
+    `read_course_file` gives a file's text.
+    """
     client = await get_client()
     try:
         files = await fetch_files(client, course_id)
     except (CanvasAuthError, CanvasNotFoundError) as exc:
-        return _unavailable(exc)
+        return await _linked_files_instead(client, course_id, exc)
 
     overrides = _overrides()
     rows: list[dict[str, Any]] = []
     for f in files:
         rule = overrides.for_file(course_id, f.id, f.display_name)
         if rule is None:
-            rows.append(_dump(f))
+            rows.append(_dump(f, drop=FILE_ROW_DROP))
         elif rule.action == "replace":
             try:
                 local = load_replacement(rule)
@@ -660,19 +741,49 @@ async def list_files(course_id: int) -> dict[str, Any]:
                             "updated_at": local.updated_at,
                             "url": None,
                         }
-                    )
+                    ),
+                    drop=FILE_ROW_DROP,
                 )
             )
     return {"count": len(rows), "files": rows}
+
+
+async def _linked_files_instead(
+    client: CanvasClient, course_id: int, refusal: Exception
+) -> dict[str, Any]:
+    """The files a course links to, for when it refuses to list its own."""
+    found = await discover_linked_files(client, course_id)
+    overrides = _overrides()
+    rows = [
+        _dump(f)
+        for f in found.files
+        if (rule := overrides.for_file(course_id, f.id, f.display_name)) is None
+        or rule.action != "hide"
+    ]
+    if not rows:
+        return {**_unavailable(refusal), "hint": FILES_HIDDEN_HINT}
+    out: dict[str, Any] = {
+        "files_tab_hidden": True,
+        "count": len(rows),
+        "note": LINKED_FILES_NOTE,
+        "files": rows,
+    }
+    if found.sources_unavailable:
+        out["sources_unavailable"] = found.sources_unavailable
+    if found.notes:
+        out["partial"] = found.notes
+    return out
 
 
 @mcp.tool
 async def read_course_file(file_id: int) -> dict[str, Any]:
     """Extract readable text from one Canvas file.
 
-    Handles PDF, Word (.docx) and text-based formats; Word documents come back
-    as Markdown with headings, lists and tables kept. Scanned PDFs contain no
-    extractable text and are reported as such rather than returned empty.
+    Handles PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx) and
+    text-based formats; documents come back as Markdown with headings, lists
+    and tables kept. Scanned PDFs contain no extractable text and are
+    reported as such rather than returned empty. `download_url` is the
+    original file, for any type; `download_course_file` explains how to use it.
     """
     client = await get_client()
     try:
@@ -697,6 +808,87 @@ async def read_course_file(file_id: int) -> dict[str, Any]:
         text=local.text,
         note=local.note,
     ).model_dump()
+
+
+# Image types a model can be shown, and the most it can take: 5 MB once
+# base64-encoded, which is 3.75 MB of image.
+INLINE_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+INLINE_IMAGE_MAX_BYTES = 3_750_000
+
+DOWNLOAD_HOW_TO = (
+    "Give the user this link, or fetch it where a shell is available: "
+    'curl -L -o "<display_name>" "<download_url>". The link works without '
+    "signing in to Canvas, so do not post it anywhere public."
+)
+
+
+@mcp.tool
+async def download_course_file(file_id: int, include_image: bool = True) -> ToolResult:
+    """Download any Canvas file: a link to the original, whatever its type.
+
+    Use this for the file itself rather than its text -- slides, spreadsheets,
+    starter code, archives, datasheets, images -- or when the user asks to
+    download or save one. Works on any file id: from `list_files`, from a
+    module item's `file_id`, or from the `linked_files` of a page, syllabus,
+    assignment, discussion or announcement. That includes courses where
+    `list_files` is unavailable, because the Files tab being hidden does not
+    stop individual files from being fetched.
+
+    Images (PNG, JPEG, GIF, WebP up to 3.75 MB) are also returned inline so
+    they can be looked at directly; `include_image=False` skips that.
+    `read_course_file` is the tool for a file's text.
+    """
+    client = await get_client()
+    try:
+        meta = await fetch_file_meta(client, file_id)
+    except (CanvasAuthError, CanvasNotFoundError) as exc:
+        return ToolResult(structured_content=_unavailable(exc))
+
+    rule = _overrides().for_file(None, file_id, meta.display_name)
+    if rule is not None and rule.action == "hide":
+        return ToolResult(structured_content=_hidden())
+
+    row: dict[str, Any] = {
+        "id": meta.id,
+        "display_name": meta.display_name,
+        "content_type": meta.content_type,
+        "size": meta.size,
+        "updated_at": meta.updated_at,
+    }
+    if rule is not None:
+        # The Canvas link would lead straight back to the file being replaced.
+        row["note"] = (
+            "This file is served from a local copy that has no download link; "
+            "`read_course_file` returns its text."
+        )
+        return ToolResult(structured_content=_without_nulls(row))
+    if not meta.url:
+        row.update(locked=True, unlock_at=meta.unlock_at, note=unavailable_note(meta))
+        return ToolResult(structured_content=_without_nulls(row))
+
+    row.update(download_url=meta.url, how_to=DOWNLOAD_HOW_TO)
+    kind = (meta.content_type or "").split(";")[0].strip().lower()
+    if not include_image or kind not in INLINE_IMAGE_TYPES:
+        return ToolResult(structured_content=_without_nulls(row))
+    if meta.size is None or meta.size > INLINE_IMAGE_MAX_BYTES:
+        row["note"] = (
+            f"Too large to show inline (over {INLINE_IMAGE_MAX_BYTES / 1_000_000:.2f} MB); "
+            "use the link."
+        )
+        return ToolResult(structured_content=_without_nulls(row))
+
+    try:
+        data = await download(meta)
+    except CanvasError as exc:
+        row["note"] = f"Could not fetch the image to show it: {exc}"
+        return ToolResult(structured_content=_without_nulls(row))
+    row = _without_nulls(row)
+    image = Image(data=data, format=kind.removeprefix("image/")).to_image_content()
+    return ToolResult(content=[json.dumps(row), image], structured_content=row)
+
+
+def _without_nulls(row: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in row.items() if v is not None}
 
 
 # Courses that hide the Pages tab usually still publish the pages themselves,
@@ -759,6 +951,7 @@ async def get_page(course_id: int, page_url: str) -> dict[str, Any]:
     # Matched on what Canvas returned, so "front_page" resolves to its slug.
     rule = _overrides().for_page(course_id, page.url, page.title)
     if rule is None:
+        page.linked_files = _visible_links(course_id, page.linked_files)
         return page.model_dump()
     if rule.action == "hide":
         return _hidden()
@@ -766,7 +959,10 @@ async def get_page(course_id: int, page_url: str) -> dict[str, Any]:
         local = load_replacement(rule)
     except OverridesError as exc:
         return _override_failed(exc)
-    return page.model_copy(update={"body": local.text, "updated_at": local.updated_at}).model_dump()
+    # The Canvas body's links go with it; the local copy replaced them.
+    return page.model_copy(
+        update={"body": local.text, "updated_at": local.updated_at, "linked_files": None}
+    ).model_dump()
 
 
 @mcp.tool
@@ -775,6 +971,8 @@ async def list_modules(course_id: int) -> dict[str, Any]:
 
     Modules encode the order an instructor intends work to be done in, which
     is the ordering signal that survives when due dates have gone stale.
+    File items carry a `file_id` for `read_course_file` and
+    `download_course_file`.
     """
     client = await get_client()
     try:
@@ -792,8 +990,8 @@ async def list_modules(course_id: int) -> dict[str, Any]:
 def _hidden_item(course_id: int, item: ModuleItem) -> bool:
     """Whether a module item links to content an override hides."""
     rule = None
-    if item.type == "File" and item.content_id is not None:
-        rule = _overrides().for_file(course_id, item.content_id, item.title)
+    if item.file_id is not None:
+        rule = _overrides().for_file(course_id, item.file_id, item.title)
     elif item.type == "Page":
         rule = _overrides().for_page(course_id, item.page_url, item.title)
     return rule is not None and rule.action == "hide"
