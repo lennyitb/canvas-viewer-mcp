@@ -29,7 +29,7 @@ access token and a password — your instance, your token, your login.
   replies to classmates most rubrics also require. One call reports what was
   asked for next to what was actually posted.
 - **Reading course material in the conversation that needs it.** Lecture PDFs,
-  rubrics and wiki pages are listed and their text extracted on request, so
+  Word handouts, rubrics and wiki pages are listed and their text extracted on request, so
   there is no download-and-paste step.
 - **Seeing where a grade actually stands**, including what is still ungraded
   and what a given assignment is worth.

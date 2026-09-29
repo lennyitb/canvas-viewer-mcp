@@ -670,8 +670,9 @@ async def list_files(course_id: int) -> dict[str, Any]:
 async def read_course_file(file_id: int) -> dict[str, Any]:
     """Extract readable text from one Canvas file.
 
-    Handles PDF and text-based formats. Scanned PDFs contain no extractable
-    text and are reported as such rather than returned empty.
+    Handles PDF, Word (.docx) and text-based formats; Word documents come back
+    as Markdown with headings, lists and tables kept. Scanned PDFs contain no
+    extractable text and are reported as such rather than returned empty.
     """
     client = await get_client()
     try:

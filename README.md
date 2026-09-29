@@ -249,7 +249,7 @@ interpreting.
 | `list_announcements` | Recent announcements across all courses, with text (or titles only) |
 | `list_discussions` / `get_discussion` | Topics, and one topic with the user's own participation counted; the reply tree on request |
 | `list_discussion_participation` | Every graded discussion with the reply requirement and the user's post counts, in one call |
-| `list_files` / `read_course_file` | Course files, and text extracted from one |
+| `list_files` / `read_course_file` | Course files, and text extracted from one (PDF, Word .docx, text) |
 | `list_pages` / `get_page` | Wiki pages, and one page's body |
 | `get_syllabus` | The course's Syllabus tab |
 | `list_modules` | Modules and their items, in instructor-intended order |
@@ -355,7 +355,7 @@ The file is `overrides.toml` beside `config.toml`, or wherever
 to the file's own folder.
 
 ```toml
-# The Syllabus tab of course 12345, replaced by a local PDF (or .md, .txt).
+# The Syllabus tab of course 12345, replaced by a local PDF (or .docx, .md, .txt).
 [[override]]
 course = 12345
 kind = "syllabus"

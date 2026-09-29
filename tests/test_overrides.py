@@ -19,7 +19,10 @@ import respx
 from fastmcp import Client
 
 from canvas_viewer_mcp import overrides, server
-from canvas_viewer_mcp.overrides import OverridesError, parse
+from canvas_viewer_mcp.canvas.files import DOCX_TYPE
+from canvas_viewer_mcp.overrides import OverridesError, guess_type, parse
+
+from .test_files import _docx, _p
 
 BASE = "https://canvas.test"
 API = f"{BASE}/api/v1"
@@ -236,6 +239,24 @@ async def test_read_course_file_serves_the_local_copy_without_downloading(odir: 
     assert result["text"] == "// new uart driver\n"
     assert result["display_name"] == "uart.c"
     assert not download.called
+
+
+def test_docx_type_does_not_depend_on_the_host_mime_table() -> None:
+    assert guess_type(Path("rubric.DOCX")) == DOCX_TYPE
+
+
+@respx.mock
+async def test_read_course_file_serves_a_local_docx_as_text(odir: Path) -> None:
+    rules = '[[override]]\ncourse = 7\nkind = "file"\nid = 3\nwith = "notes-rev2.docx"'
+    _write(odir, rules)
+    (odir / "notes-rev2.docx").write_bytes(_docx(_p("Revised lab notes")))
+    respx.get(f"{API}/files/3").mock(return_value=httpx.Response(200, json=FILES[2]))
+
+    result = await _call("read_course_file", {"file_id": 3})
+
+    assert result["text"] == "Revised lab notes"
+    assert result["content_type"] == DOCX_TYPE
+    assert result["note"] is None
 
 
 @respx.mock

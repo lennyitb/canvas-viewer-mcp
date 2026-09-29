@@ -45,15 +45,17 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal
 
-from .canvas.files import extract_text
+from .canvas.files import DOCX_TYPE, extract_text
 from .config import _config_file_path
 
 Kind = Literal["syllabus", "file", "page"]
 Action = Literal["hide", "replace"]
 KINDS: tuple[str, ...] = ("syllabus", "file", "page")
 
-# mimetypes knows .c and .h, but not every source extension a course ships.
-_TEXT_SUFFIXES = {
+# mimetypes knows .c and .h, but not every source extension a course ships,
+# and on 3.11 it knows .docx only when the host has /etc/mime.types.
+_SUFFIX_TYPES = {
+    ".docx": DOCX_TYPE,
     ".md": "text/markdown",
     ".markdown": "text/markdown",
     ".c": "text/x-c",
@@ -309,7 +311,7 @@ def reset_cache() -> None:
 
 def guess_type(path: Path) -> str:
     return (
-        _TEXT_SUFFIXES.get(path.suffix.lower())
+        _SUFFIX_TYPES.get(path.suffix.lower())
         or mimetypes.guess_type(path.name)[0]
         or "application/octet-stream"
     )
@@ -328,7 +330,7 @@ def load_replacement(rule: Override) -> Replacement:
             f"Override #{rule.index}: cannot read {path}: {exc.strerror or exc}."
         ) from None
     content_type = guess_type(path)
-    text, note = extract_text(data, content_type)
+    text, note = extract_text(data, content_type, path.name)
     updated = datetime.fromtimestamp(stat.st_mtime, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     return Replacement(
         text=text, note=note, content_type=content_type, size=len(data), updated_at=updated

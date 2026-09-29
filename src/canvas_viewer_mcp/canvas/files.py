@@ -10,20 +10,32 @@ being applied to what is really a blob fetch.
 from __future__ import annotations
 
 import io
+import sys
+import zipfile
 from typing import Any
 
 import httpx
+import mammoth
+import mammoth.images
 from pydantic import BaseModel
 from pypdf import PdfReader
 
 from .client import CanvasClient
 from .errors import CanvasError
+from .html_text import html_to_markdown
 
 JsonObject = dict[str, Any]
 
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 MAX_EXTRACTED_CHARS = 20_000
 MAX_PDF_PAGES = 50
+# A .docx is a zip, so the 25 MB download cap says little about what it
+# inflates to. Anything past this is a zip bomb, not a handout.
+MAX_DOCX_XML_BYTES = 50 * 1024 * 1024
+
+DOCX_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# Types Canvas sometimes gives a .docx upload instead of the real one.
+_GENERIC_TYPES = {"application/octet-stream", "application/zip", "application/x-zip-compressed"}
 
 TEXTUAL_TYPES = {
     "text/plain",
@@ -105,25 +117,65 @@ def _extract_pdf(data: bytes) -> tuple[str | None, str | None]:
     return text, note
 
 
-def extract_text(data: bytes, content_type: str | None) -> tuple[str | None, str | None]:
+def _blank_image(image: Any) -> dict[str, str]:
+    # An empty data URI instead of the base64 mammoth would embed; html_to_markdown
+    # turns it into "[image]", as it does for images in Canvas bodies.
+    return {"src": "data:,"}
+
+
+def _extract_docx(data: bytes) -> tuple[str | None, str | None]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            body = archive.getinfo("word/document.xml")
+    except (zipfile.BadZipFile, KeyError) as exc:
+        return None, f"Could not parse Word document: {exc}"
+
+    if body.file_size > MAX_DOCX_XML_BYTES:
+        return None, (
+            f"Word document body inflates to {body.file_size / 1_048_576:.0f} MB, over the "
+            f"{MAX_DOCX_XML_BYTES // 1_048_576} MB limit. Not extracted."
+        )
+
+    try:
+        result = mammoth.convert_to_html(
+            io.BytesIO(data), convert_image=mammoth.images.img_element(_blank_image)
+        )
+    except Exception as exc:  # mammoth, like pypdf, raises a wide variety
+        return None, f"Could not parse Word document: {exc}"
+
+    # Truncation, and its note, is left to extract_text so it happens once.
+    text = html_to_markdown(result.value, max_chars=sys.maxsize)
+    if not text:
+        return None, "Word document contains no text."
+    return text, None
+
+
+def extract_text(
+    data: bytes, content_type: str | None, filename: str | None = None
+) -> tuple[str | None, str | None]:
     """Readable text from a file's bytes, and a note when it is absent or cut.
 
     Shared by Canvas downloads and local override files, so a replacement
-    comes back exactly as the original would have.
+    comes back exactly as the original would have. ``filename`` is consulted
+    only when the content type is too generic to go on.
     """
     kind = (content_type or "").split(";")[0].strip().lower()
+    if kind in _GENERIC_TYPES and (filename or "").lower().endswith(".docx"):
+        kind = DOCX_TYPE
     text: str | None
     note: str | None = None
 
     if kind == "application/pdf":
         text, note = _extract_pdf(data)
+    elif kind == DOCX_TYPE:
+        text, note = _extract_docx(data)
     elif kind in TEXTUAL_TYPES or kind.startswith("text/"):
         text = data.decode("utf-8", errors="replace")
     else:
         text = None
         note = (
             f"No text extractor for {kind or 'unknown type'}. "
-            "Supported: PDF and text-based formats."
+            "Supported: PDF, Word (.docx) and text-based formats."
         )
 
     if text and len(text) > MAX_EXTRACTED_CHARS:
@@ -175,7 +227,7 @@ async def read_file(
     except httpx.HTTPError as exc:
         raise CanvasError(f"Could not download file {file_id}: {exc}") from exc
 
-    text, note = extract_text(data, meta.content_type)
+    text, note = extract_text(data, meta.content_type, meta.filename or meta.display_name)
 
     return ExtractedFile(
         id=meta.id,
