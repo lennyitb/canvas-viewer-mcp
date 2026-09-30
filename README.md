@@ -249,16 +249,133 @@ interpreting.
 | `list_announcements` | Recent announcements across all courses, with text (or titles only) |
 | `list_discussions` / `get_discussion` | Topics, and one topic with the user's own participation counted; the reply tree on request |
 | `list_discussion_participation` | Every graded discussion with the reply requirement and the user's post counts, in one call |
-| `list_files` | Course files; in a course that hides its Files tab, the files its content links to |
-| `read_course_file` | Text extracted from one file (PDF, Word, PowerPoint, Excel, text) |
-| `download_course_file` | A download link for one file of any type, and small images shown inline |
-| `list_pages` / `get_page` | Wiki pages, and one page's body |
 | `get_syllabus` | The course's Syllabus tab |
 | `list_modules` | Modules and their items, in instructor-intended order |
+| `list_pages` / `get_page` | Wiki pages, and one page's body |
+| `list_files` | Course files, or the files the course links to when its Files tab is hidden |
+| `read_course_file` | The text of one file: PDF, Word, PowerPoint, Excel or plain text |
+| `download_course_file` | A download link for one file of any type; images also shown inline |
 
-Course tabs are often disabled, and Canvas reports that as an error instead of
-an empty list. Those tools return `{"unavailable": true, "reason": ...}` so a
-sweep across courses is not lost to one locked course.
+### Course structure
+
+Courses differ in where they keep their material. Some put everything in
+modules. Some publish a page per week and link the pages from the course home
+page. Some keep the syllabus on the Syllabus tab, some upload it as a file and
+link it from there, and some link a handout only from the assignment that uses
+it. The server has no model of this and does not impose one. Each tool reports
+what it found, says when Canvas refused, and names where else to look; choosing
+where to look is left to the model. The problems met on real courses, and what
+was done about each:
+
+**Hidden tabs.** Instructors disable course tabs, and Canvas reports a disabled
+tab as a 403 (files) or 404 (pages) rather than an empty list. On a real
+account with eleven active courses, including non-teaching shells, the file
+list was refused in five and the page list in seven. A tool that raised on a
+refusal would end a whole-account sweep at the first such course, so every tool
+returns `{"unavailable": true, "reason": ...}` instead and the sweep continues.
+
+**Hidden Pages tab.** A course that hides the Pages list usually still
+publishes the pages themselves, typically one per week, linked from the course
+home page. Without a pointer, a caller reads the refusal as "this course has no
+pages". The `list_pages` refusal therefore carries a `hint`: call `get_page`
+with `page_url` set to `front_page`, follow the `/courses/<id>/pages/<slug>`
+links in its body by passing each slug to `get_page`, and check
+`list_modules`, which may link the same pages. Canvas serves the home page from
+its own endpoint rather than as a slug, so `get_page` accepts `front_page` as
+a name.
+
+**Hidden Files tab.** Canvas refuses the file list, but `files/:id` still
+serves each file to anyone enrolled. Two of the account's five teaching courses
+hid the tab, and in both the syllabus was a file found only through a link: one
+from a module item, the other a `.docx` linked from the Syllabus tab.
+`list_files` in such a course rebuilds the list from every place the course
+links to a file: module items, the Syllabus tab, the front page, assignment
+descriptions, pages, discussion topics and the last year of announcements. If
+the Pages tab is hidden too, the pages the modules name are read one by one,
+up to 40. Each row's `linked_from` names where the file was found. The result
+is marked `files_tab_hidden`, carries a note that a file linked from nowhere
+cannot appear and that a link can outlive its file, lists any source Canvas
+refused in `sources_unavailable`, and any source read only in part in
+`partial`. If nothing at all is found, the refusal carries a hint saying where
+file ids turn up.
+
+**File ids in HTML.** Canvas bodies link to files in several forms:
+`/courses/1/files/2?wrap=1`, `/files/2/download`,
+`/api/v1/courses/1/files/2`, `/users/3/files/2/preview`. Converted to
+Markdown, the id is still present but inside a URL, which reads as a web link
+rather than a file to fetch. Every tool that returns a body also returns
+`linked_files`: the file ids found in its links, images and embeds, each with
+a name taken from the link's `title` attribute (where the rich content editor
+writes the real filename), then `alt`, then the link text. This applies to
+`get_page`, `get_syllabus`, `get_assignment`, `get_discussion` and
+`list_announcements`, and discussion attachments are included. A module item
+of type File carries its file id as `file_id` rather than the generic
+`content_id`, and a file attached to a feedback comment carries its `id`. Ids
+from any of these work with `read_course_file` and `download_course_file`
+whether or not the Files tab is hidden.
+
+**Syllabus.** The Syllabus tab often holds the schedule, the grading breakdown
+and the deadline policy that assignment metadata leaves out, or it holds
+nothing and the syllabus is a file. `get_syllabus` returns the tab's body with
+its `linked_files`, and a `note` when the tab is empty. Its description names
+`list_modules` and `list_files` as the next places to look.
+
+**Modules.** Modules are available in nearly every course, hidden tabs or
+not, and hold the order the instructor intends the work to be done in. On one
+real course whose due dates had not been rolled forward, the module order
+matched the order of the stale dates exactly, offset by about a year; it is
+the ordering signal that survives stale dates. `list_modules` returns each
+module's items in position, with `file_id` for a File item, `page_url` for a
+Page item, `content_id` for an assignment or discussion, `html_url`, and the
+completion requirement and its state where Canvas sets one.
+
+**Ids across objects.** A graded discussion is two Canvas objects with
+different ids, an assignment and a topic. Assignment rows for discussions
+carry `discussion_topic_id`, which `get_discussion` takes, and topics carry
+`assignment_id`, which `get_assignment` takes. With `file_id`, `page_url` and
+`linked_files`, every object the tools return names the id another tool
+needs, so whichever objects a course exposes lead to the rest.
+
+**Announcements without a course.** The account-wide announcements endpoint,
+which fetches every course's announcements in one request, does not return
+`course_id`; it names the course in `context_code` as `course_<id>`. Reading
+only `course_id` there left every announcement with a null course, the one
+field needed to act on it. The course id is now taken from `course_id` where
+present, else from `context_code`, else from the topic's own URL.
+
+**Reading a file.** `read_course_file` extracts text from PDF, Word,
+PowerPoint, Excel and text-based files, as Markdown with headings, lists and
+tables where the format has them; PowerPoint text is per slide with speaker
+notes, Excel per sheet as a table. Canvas sometimes labels an Office upload
+`application/octet-stream` or `application/zip`, in which case the real type
+is taken from the filename. Limits: 25 MB downloaded, 50 PDF pages, 200 rows
+by 30 columns per sheet, 20,000 characters of text, and an Office file is
+refused if its zip inflates past 100 MB. Every limit that applies is reported
+in a `note` with what was cut. A scanned PDF is reported as having no
+extractable text rather than returned empty. `download_url` is returned
+alongside the text, so a file that cannot be read can still be downloaded.
+
+**Downloading a file.** Getting a file rather than its text used to mean
+copying the `url` off a `list_files` row, which no tool description mentioned
+and which failed in any course hiding the tab. `download_course_file` returns
+the file's own Canvas link for any file id. Canvas file links are pre-signed
+and carry their credentials in the query string, so the link works without a
+Canvas session; the response says so, and gives a `curl` line for a shell.
+PNG, JPEG, GIF and WebP images up to 3.75 MB (5 MB once base64-encoded) also
+come back inline. A locked file comes back `locked` with its `unlock_at`;
+handouts are commonly uploaded at the start of term and unlocked a week at a
+time. Checked live: the link for a `.pptx` fetched 2,652,719 bytes, the size
+Canvas reports for it.
+
+**Hints in the tool descriptions.** Each tool's description says what its
+result does not settle and which tool comes next. `list_assignments` says a
+discussion row is not done on its submission state and points at
+`list_discussion_participation`; `get_syllabus` says a syllabus is often a
+linked file that `read_course_file` reads; `list_files` says its rows carry
+no download link and `download_course_file` does; `list_modules` says File
+items carry a `file_id`. The server also sends the client a short set of
+instructions at connection time covering stale dates, graded discussions,
+feedback and files, so a model has them before its first call.
 
 ### Graded discussions
 
@@ -286,31 +403,6 @@ are always nested. On one topic it returned 22 of 77 entries. The server reads
 the full thread view, and reports `full_thread: false` when Canvas could only
 give it the top level.
 
-### Files
-
-Instructors often hide the Files tab, and Canvas then refuses the file list
-with a 403. The files themselves stay readable by id to anyone enrolled; only
-the list is gone. On one real account that was two courses of five, one of
-them with its syllabus posted only as a linked `.docx`.
-
-How the tools surface this:
-
-- `list_files` in such a course rebuilds the list from what the course links
-  to: module items, the syllabus, the front page, assignments, pages (read one
-  by one from the modules if the Pages tab is hidden too), discussions and
-  announcements. Each row says where it was found in `linked_from`, and the
-  result says it may be incomplete.
-- Module items of type File carry a `file_id`, and `get_page`, `get_syllabus`,
-  `get_assignment`, `get_discussion` and `list_announcements` carry the
-  `linked_files` in their bodies, named from the link's title where the editor
-  writes the real filename.
-- `download_course_file` returns the file's own pre-signed Canvas link, which
-  works without signing in, so the user can open it or a shell can fetch it.
-  Images under 3.75 MB also come back inline for the model to look at.
-- `read_course_file` returns the same `download_url` alongside the text, so a
-  file it cannot read (an archive, source code in an unknown type) still leads
-  somewhere.
-
 ### Response size
 
 Everything these tools return lands in a model's context window, so lists are
@@ -324,9 +416,9 @@ lean and detail is opt-in:
 - `list_feedback` returns only recently graded or commented work, and leaves
   out the user's own comments unless asked. Comments are capped at 2k
   characters with a visible truncation marker.
-- `list_files` rows omit the download link, the stored filename and the
-  folder; on a 97-file course that is 17k characters instead of 39k.
-  `download_course_file` gives the link for the one file wanted.
+- `list_files` rows omit the download link, the stored filename, the creation
+  date and the folder; on a 97-file course that is 17k characters instead of
+  39k. `download_course_file` gives the link for the one file wanted.
 - `list_discussion_participation` replaces a `list_assignments` sweep followed
   by `get_assignment` and `get_discussion` per discussion. On a course with 20
   graded discussions that is roughly 14k characters in place of 765k.
