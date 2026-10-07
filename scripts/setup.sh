@@ -528,4 +528,4 @@ EOF
 esac
 
 note ""
-note "The skills are a separate install -- see README.md, step 3."
+note "The optional dashboard skill is a separate install -- see README.md, step 3."

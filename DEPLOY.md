@@ -100,8 +100,8 @@ Then, depending on mode: for `proxy`, add the vhost from step 5 below; for
 `tls`, check `docker compose --profile tls logs caddy` shows a certificate was
 obtained; for `tunnel`, confirm the tunnel is healthy in Cloudflare.
 
-The last step is the user's: add the connector in claude.ai, and install the
-skills. Both are in [README.md](README.md#2-connect-claude-to-it).
+The last step is the user's: add the connector in claude.ai, and optionally
+install the dashboard skill. Both are in [README.md](README.md#2-connect-claude-to-it).
 
 ---
 
@@ -321,8 +321,8 @@ the pairing code from step 4, or your own password if you set one. Once
 authorized, the connector is attached to your account and the iOS and Android
 apps pick it up automatically.
 
-The skills are a separate install; see
-[README.md](README.md#3-install-the-skills).
+The optional dashboard skill is a separate install; see
+[README.md](README.md#3-optional-add-the-dashboard-skill).
 
 ---
 

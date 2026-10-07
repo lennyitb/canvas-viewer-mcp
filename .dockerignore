@@ -15,7 +15,6 @@ overrides
 .env.*
 token
 *.token
-PLAN.md
 skills
 scripts
 DEPLOY.md

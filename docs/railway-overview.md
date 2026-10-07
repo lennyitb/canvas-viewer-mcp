@@ -56,7 +56,7 @@ access token and a password — your instance, your token, your login.
 - [Generating a Canvas access token](https://community.canvaslms.com/t5/Student-Guide/How-do-I-manage-API-access-tokens-as-a-student/ta-p/273)
 - [Canvas REST API reference](https://canvas.instructure.com/doc/api/)
 - [Model Context Protocol](https://modelcontextprotocol.io)
-- [Skills for this connector](https://github.com/lennyitb/canvas-viewer-mcp/releases/latest),
+- [Optional dashboard skill](https://github.com/lennyitb/canvas-viewer-mcp/releases/latest),
   installed separately on claude.ai under Settings → Capabilities → Skills
 
 ### Implementation Details

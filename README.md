@@ -51,11 +51,12 @@ Things you can ask once it's set up:
 
 ## Install
 
-There are three steps:
+There are two steps, plus an optional third:
 
 1. Run the server. This is the small program that talks to Canvas for you.
 2. Connect Claude to it.
-3. Add the skills, which teach Claude how to make sense of what it reads.
+3. Optionally, add the dashboard skill, which turns your week into a page you
+   can come back to.
 
 Step 1 has three options, so start by picking one.
 
@@ -165,7 +166,7 @@ shell history. Then add the server to Claude Code:
 claude mcp add canvas-viewer -- canvas-viewer-mcp
 ```
 
-Skip step 2 and go to [step 3](#3-install-the-skills).
+Skip step 2. You're done, unless you want [the dashboard skill](#3-optional-add-the-dashboard-skill).
 
 ### 2. Connect Claude to it
 
@@ -178,34 +179,44 @@ connector, but they will pick this one up by themselves once it's added.
    chose a pairing code instead of a password, enter the code the server
    printed in its log.)
 
-### 3. Install the skills
+### 3. (Optional) Add the dashboard skill
 
-Skills are instructions that teach Claude how to turn the raw Canvas data into
-a useful answer. They are installed separately from the connector.
+You don't need a skill to use Canvas Viewer. The connector itself tells Claude
+how to read what it gets back: which due dates are stale copies from last
+term, why a discussion marked submitted may still need replies, what a hidden
+or provisional grade means. Once step 2 is done, just ask.
+
+The skill is for one specific job: a **Canvas Dashboard** page that Claude
+builds and keeps up to date. It has what's due this week grouped by day, big
+assignments coming up (with any hints from your instructors to start early),
+a review of last week's grades, feedback and missing work, recent
+announcements, and a short summary of what changed since the last time you
+looked. With the skill installed, questions like "what's due this week?" are
+answered with the dashboard too.
 
 | Skill | What you get |
 | --- | --- |
-| [`canvas-week-report`](skills/canvas-week-report/SKILL.md) | A short, prioritized list of what you still have to do. It shows deadlines in your local time, works out real dates for courses that were copied from an earlier term, and checks for discussion replies you still owe. |
-| [`canvas-dashboard`](skills/canvas-dashboard/SKILL.md) | The same information as a dashboard page, with recent announcements and a summary of your week. |
+| [`canvas-dashboard`](skills/canvas-dashboard/SKILL.md) | A dashboard page of your week that updates in place each time you ask. |
 
 **On claude.ai:**
 
 1. Open the [latest release](https://github.com/lennyitb/canvas-viewer-mcp/releases/latest)
-   and download `canvas-week-report.zip` and `canvas-dashboard.zip`.
+   and download `canvas-dashboard.zip`.
 2. Go to **Settings → Capabilities → Skills → Upload skill**.
-3. Upload each file, one at a time.
+3. Upload the file.
 
-Use the zip files from the release page. Zipping the folders from this page
+Use the zip file from the release page. Zipping the folder from this page
 yourself won't work.
 
 **In Claude Code:**
 
 ```bash
 git clone https://github.com/lennyitb/canvas-viewer-mcp
-cp -r canvas-viewer-mcp/skills/canvas-* ~/.claude/skills/
+cp -r canvas-viewer-mcp/skills/canvas-dashboard ~/.claude/skills/
 ```
 
-Then ask Claude what's due. You don't need to mention the skills by name.
+Then ask Claude for your Canvas dashboard. In Claude Code it's saved as
+`canvas-dashboard.html` in the folder you're working in.
 
 ## Turning it off
 
@@ -223,7 +234,7 @@ any of it to use Canvas Viewer.
 
 Canvas Viewer is a read-only [MCP](https://modelcontextprotocol.io) server with
 fifteen tools. The hosted form runs in a container behind a single-user OAuth
-2.1 login. [PLAN.md](PLAN.md) describes how it was built.
+2.1 login.
 
 ### Design
 
@@ -235,8 +246,11 @@ and `updated_at`.
 
 The server does no classification. It has no "overdue" buckets and no guesses
 about stale dates. It returns what Canvas holds, plus assignment bodies, files,
-discussions, announcements and instructor feedback, and the model (guided by the skills) does the
-interpreting.
+discussions, announcements and instructor feedback, and the model does the
+interpreting. The server's MCP instructions and tool descriptions give it the
+context it needs for that (stale copied dates, untracked discussion replies,
+hidden and provisional grades), so no skill is required to read the data
+correctly.
 
 ### Tools
 
