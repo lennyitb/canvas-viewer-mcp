@@ -310,6 +310,17 @@ async def test_every_tool_is_registered() -> None:
     }
 
 
+async def test_instructions_fit_what_a_client_shows() -> None:
+    """Claude clients keep the first 2,048 characters of a server's
+    instructions and drop the rest, mid-word if need be. Past that, the
+    course-files guidance and the closing caution never reached a model."""
+    async with Client(server.mcp) as c:
+        sent = c.instructions
+
+    assert sent == server.INSTRUCTIONS
+    assert len(sent) <= 2048
+
+
 async def test_no_tool_can_write() -> None:
     """Read-only is a property of the code, not a setting. The client class
     exposes no verb but GET, so assert that stays true."""

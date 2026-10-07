@@ -375,7 +375,9 @@ linked file that `read_course_file` reads; `list_files` says its rows carry
 no download link and `download_course_file` does; `list_modules` says File
 items carry a `file_id`. The server also sends the client a short set of
 instructions at connection time covering stale dates, graded discussions,
-feedback and files, so a model has them before its first call.
+feedback and files, so a model has them before its first call. Clients show
+only the first 2,048 characters of those, so they stay under that and leave
+the detail to the tool descriptions.
 
 ### Graded discussions
 

@@ -290,10 +290,12 @@ never showed up in the sweep at all.
       newest first across courses, in 23.8k characters against 22.3k: the
       added length is `last_change_at`. Every rubric on the account had
       marks, so none was dropped
-- [ ] The connection instructions were already past the 2,048 characters a
-      Claude client shows (it cuts them off mid-word in the Files paragraph),
-      and this adds about 60 more. The detail went into the `list_feedback`
-      description instead; the instructions still need cutting to fit
+- [x] The connection instructions were already past the 2,048 characters a
+      Claude client shows (it cut them off mid-word in the Files paragraph),
+      so the end of the files guidance and the closing caution never reached
+      a model. Rewritten as rules and pointers, leaving detail to the tool
+      descriptions: 2,597 characters down to 1,783, with a test holding them
+      under the cap
 - [ ] Live: a Circuits lab during its hidden gap reads `graded` with
       `graded_at` set and no `posted_at`, score or rubric marks
 - [ ] Live: the next Circuits quiz with written questions reads

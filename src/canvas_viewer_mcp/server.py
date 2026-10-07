@@ -74,49 +74,41 @@ from .config import Config
 from .overrides import Override, OverridesError, load_replacement
 from .overrides import current as _overrides
 
+# Clients show only the first 2,048 characters of this (Claude Code cuts it
+# off mid-word), so it stays under that and leaves detail to the tool
+# descriptions. A test holds it there.
 INSTRUCTIONS = """
 Read-only access to the user's Canvas LMS account.
 
-Canvas due dates are frequently unreliable. Courses are commonly copied from a
-previous term without the dates being rolled forward, which leaves assignments
-carrying due dates a year in the past that Canvas then reports as `missing`.
-Every assignment therefore carries `created_at` and `updated_at` alongside
-`due_at`: an assignment created weeks ago but dated last year is a stale copy,
-not overdue work.
+Canvas due dates are often wrong. Courses copied from a previous term keep
+last year's dates, which Canvas then reports as `missing`. Compare `due_at`
+with `created_at`: an assignment created weeks ago but due last year is a
+stale copy, not overdue work.
 
-Graded discussions need extra scrutiny before being called done. Canvas records
-a discussion submission the instant the first post goes up and has no field at
-all for the replies to classmates that most rubrics also require, so a
-discussion reads `submitted` or even `graded` while replies are still owed.
-Its `due_at` is usually only the *post* deadline; the reply deadline is later
-and stated in prose in the description. Never treat a `discussion_topic`
-assignment as complete from its submission state. To check every graded
-discussion at once, call `list_discussion_participation`: one call, no post
-bodies, and for each discussion the reply-requirement sentences from its
-description next to a count of what the user actually posted, replies to
-other people counted separately. `get_discussion` does the same for one topic
-and can also return the thread itself when the posts need reading.
+Never call a graded discussion done from its submission state. Canvas marks
+it `submitted`, even `graded`, on the first post and has no field for the
+replies to classmates most rubrics require. `due_at` is usually the post
+deadline; the later reply deadline is only in the description.
+`list_discussion_participation` checks every graded discussion in one call:
+the reply requirement beside a count of the user's posts and replies.
+`get_discussion` does one topic and can return the thread.
 
-Instructor feedback -- comments, rubric marks, attached files -- is in the
-`feedback` field of `get_assignment`, and `list_feedback` sweeps what was
-graded, released or commented on recently. Comments sometimes carry work the
-grade does not show: a resubmission offer, a revision deadline, a request to
-meet. A graded submission with no `posted_at` is a hidden grade, its score,
-rubric marks and pre-release comments withheld; `pending_review` marks a
-provisional score.
+Instructor feedback -- comments, rubric marks, files -- is in the `feedback`
+of `get_assignment`, and `list_feedback` sweeps what was graded, released or
+commented on recently. Comments can carry work the grade does not show: a
+resubmission offer, a revision deadline, a request to meet. A graded
+submission with no `posted_at` is a hidden grade, its score, marks and
+pre-release comments withheld; `pending_review` marks a provisional score.
 
-Course files -- handouts, lab sheets, starter code, slides, syllabi -- are
-reachable by id even in courses that hide the Files tab. Ids come from
-`list_files`, from module items (`file_id`), and from the `linked_files` that
-pages, the syllabus, assignments, discussions and announcements carry.
-`read_course_file` returns a file's text (PDF, Word, PowerPoint, Excel, plain
-text); `download_course_file` returns a link to the original file of any type,
-to hand to the user or fetch with a shell, and shows images directly.
+Course files (handouts, lab sheets, slides, starter code, syllabi) are
+reachable by id even when the Files tab is hidden. Ids come from
+`list_files`, module items (`file_id`), and the `linked_files` on pages, the
+syllabus, assignments, discussions and announcements. `read_course_file`
+gives a file's text; `download_course_file` the original, of any type.
 
-These tools report what Canvas holds and classify nothing. When the real
-deadline matters, read the assignment body, the course announcements, the
-syllabus (`get_syllabus`), and the module ordering before concluding anything
-from `due_at` alone.
+These tools report what Canvas holds and classify nothing. Before trusting
+`due_at`, read the assignment body, the announcements, the syllabus
+(`get_syllabus`) and the module order.
 """.strip()
 
 DISCUSSION_CAVEAT = (
