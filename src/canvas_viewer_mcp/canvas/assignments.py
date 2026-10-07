@@ -40,6 +40,9 @@ class Submission(BaseModel):
     score: float | None = None
     grade: str | None = None
     graded_at: str | None = None
+    # Null on a graded submission while the grade is hidden, and Canvas then
+    # withholds `score` and `grade` as well.
+    posted_at: str | None = None
 
 
 class Assignment(BaseModel):
@@ -88,6 +91,7 @@ def flatten_submission(raw: JsonObject | None) -> Submission | None:
         score=raw.get("score"),
         grade=raw.get("grade"),
         graded_at=raw.get("graded_at"),
+        posted_at=raw.get("posted_at"),
     )
 
 

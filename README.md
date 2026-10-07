@@ -245,7 +245,7 @@ interpreting.
 | `list_courses` | Active courses, term, current score |
 | `list_assignments` | Every assignment, no date filtering, bodies omitted |
 | `get_assignment` | One assignment including its full description and feedback: comments, rubric marks, grade |
-| `list_feedback` | Assignments graded or commented on by someone else in the last N days, with the comments and rubric marks |
+| `list_feedback` | Assignments graded, released or commented on by someone else in the last N days, newest first, with the comments and rubric marks |
 | `list_announcements` | Recent announcements across all courses, with text (or titles only) |
 | `list_discussions` / `get_discussion` | Topics, and one topic with the user's own participation counted; the reply tree on request |
 | `list_discussion_participation` | Every graded discussion with the reply requirement and the user's post counts, in one call |
@@ -403,6 +403,30 @@ are always nested. On one topic it returned 22 of 77 entries. The server reads
 the full thread view, and reports `full_thread: false` when Canvas could only
 give it the top level.
 
+### Grades and feedback
+
+A score is not always final, and not always visible. A quiz with written
+questions is released with only its auto-graded part scored: one real quiz
+read 1.4/10 for 41 hours before the written answers took it to 10/10. A
+course that posts grades by hand holds each one after grading, for up to 22
+hours on the real account. While it is held, Canvas leaves out the score,
+the rubric marks and any comments written before release, and when it is
+released the grading and comment times stay where they were. Only
+`posted_at` moves.
+
+How the tools surface this:
+
+- `list_feedback` keeps a submission when its latest change falls in the
+  window: grading, release, or anyone else's comment, new or edited. That
+  change is `last_change_at`, and rows come newest first across courses.
+- A row whose score is still provisional carries `workflow_state:
+  pending_review`. Graded rows, the usual case, leave the field out.
+- A grade entered but held has `graded_at` but no score and no `posted_at`,
+  both in `list_feedback` and on the `submission` in `list_assignments`.
+- A `list_feedback` row leaves its rubric out when Canvas sent no marks for
+  it, rather than listing every criterion unmarked. `get_assignment` keeps
+  the rubric, since before grading it is where the criteria are.
+
 ### Response size
 
 Everything these tools return lands in a model's context window, so lists are
@@ -413,9 +437,9 @@ lean and detail is opt-in:
 - `get_discussion` returns counts and the topic text by default, not the
   thread. On one real topic that is under 1k characters instead of 36k.
 - `list_announcements` takes `include_messages=False` and a `course_id`.
-- `list_feedback` returns only recently graded or commented work, and leaves
-  out the user's own comments unless asked. Comments are capped at 2k
-  characters with a visible truncation marker.
+- `list_feedback` returns only recently graded, released or commented work,
+  and leaves out the user's own comments unless asked. Comments are capped at
+  2k characters with a visible truncation marker.
 - `list_files` rows omit the download link, the stored filename, the creation
   date and the folder; on a 97-file course that is 17k characters instead of
   39k. `download_course_file` gives the link for the one file wanted.

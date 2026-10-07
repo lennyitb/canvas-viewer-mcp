@@ -75,12 +75,33 @@ def test_submission_state_survives_flattening() -> None:
                 "excused": False,
                 "score": None,
                 "grade": None,
+                "posted_at": "2026-09-27T18:02:00Z",
             }
         )
     )
     assert a.submission is not None
     assert a.submission.missing is True
     assert a.submission.submitted_at is None
+    assert a.submission.posted_at == "2026-09-27T18:02:00Z"
+
+
+def test_hidden_grade_reads_graded_with_no_score_and_no_posted_at() -> None:
+    """While a grade is held, Canvas strips the score but still sends the
+    state and `graded_at`. The missing `posted_at` is what says why."""
+    a = flatten_assignment(
+        raw_assignment(
+            submission={
+                "workflow_state": "graded",
+                "graded_at": "2026-09-26T20:07:00Z",
+                "posted_at": None,
+            }
+        )
+    )
+    assert a.submission is not None
+    assert a.submission.workflow_state == "graded"
+    assert a.submission.graded_at == "2026-09-26T20:07:00Z"
+    assert a.submission.posted_at is None
+    assert a.submission.score is None
 
 
 def test_excused_is_not_confused_with_unsubmitted() -> None:

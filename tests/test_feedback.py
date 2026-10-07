@@ -87,6 +87,13 @@ def test_absent_rubric_is_an_empty_list() -> None:
     assert flatten_feedback({"score": 3.0}, None, ME).rubric == []
 
 
+def test_unassessed_rubric_keeps_its_definition_outside_the_sweep() -> None:
+    """`get_assignment` shows the rubric before grading; it is the only place
+    the criteria appear, so flattening one submission keeps them."""
+    results = flatten_feedback({"workflow_state": "unsubmitted"}, RUBRIC, ME).rubric
+    assert [(r.criterion, r.points) for r in results] == [("Thesis", None), ("Citations", None)]
+
+
 def test_comments_are_attributed_to_the_user_or_not() -> None:
     fb = flatten_feedback(
         {"submission_comments": [comment(ME, "Question?"), comment(1, "Answer.")]}, None, ME
@@ -122,6 +129,44 @@ def test_unposted_grade_keeps_posted_at_null() -> None:
     assert fb.score == 9.0
 
 
+def test_provisional_score_keeps_its_state() -> None:
+    fb = flatten_feedback({"score": 1.4, "workflow_state": "pending_review"}, None, ME)
+    assert fb.workflow_state == "pending_review"
+    assert fb.score == 1.4
+
+
+def test_last_change_is_a_regrade_after_release() -> None:
+    """Circuits Quiz 5: released provisional on 10/4, regraded on 10/6."""
+    fb = flatten_feedback(
+        {"posted_at": "2026-10-04T20:29:37Z", "graded_at": "2026-10-06T13:41:03Z"}, None, ME
+    )
+    assert fb.last_change_at == "2026-10-06T13:41:03Z"
+
+
+def test_last_change_is_a_release_after_grading() -> None:
+    """Circuits Lab 3: graded 9/26, held, released 9/27."""
+    fb = flatten_feedback(
+        {"graded_at": "2026-09-26T20:07:00Z", "posted_at": "2026-09-27T18:02:00Z"}, None, ME
+    )
+    assert fb.last_change_at == "2026-09-27T18:02:00Z"
+
+
+def test_last_change_is_normalised_to_utc_and_ignores_own_comments() -> None:
+    fb = flatten_feedback(
+        {
+            "graded_at": "2026-09-20T08:00:00-04:00",
+            "submission_comments": [comment(ME, "Thanks!", "2026-09-30T00:00:00Z")],
+        },
+        None,
+        ME,
+    )
+    assert fb.last_change_at == "2026-09-20T12:00:00Z"
+
+
+def test_nothing_to_date_leaves_last_change_null() -> None:
+    assert flatten_feedback({"workflow_state": "unsubmitted"}, None, ME).last_change_at is None
+
+
 def test_long_comment_is_truncated_with_a_marker() -> None:
     fb = flatten_feedback(
         {"submission_comments": [comment(1, "x" * (COMMENT_MAX_CHARS + 50))]}, None, ME
@@ -141,6 +186,7 @@ async def test_recent_sweep_filters_by_window_and_ignores_own_comments(config: C
             json=[
                 {  # graded in the window
                     "graded_at": "2026-09-16T00:00:00Z",
+                    "rubric_assessment": {"_1": {"points": 10.0, "rating_id": "r_full"}},
                     "assignment": {"id": 1, "name": "Graded", "rubric": RUBRIC},
                 },
                 {  # graded long ago, but the instructor commented recently
@@ -165,7 +211,9 @@ async def test_recent_sweep_filters_by_window_and_ignores_own_comments(config: C
         items = await fetch_recent_feedback(client, 99, my_id=ME, since=since)
 
     assert [a["name"] for a, _ in items] == ["Graded", "Commented"]
-    assert len(items[0][1].rubric) == 2, "the embedded assignment rubric is joined"
+    rubric = items[0][1].rubric
+    assert len(rubric) == 2, "the embedded assignment rubric is joined"
+    assert rubric[0].rating == "Clear and arguable"
     params = route.calls.last.request.url.params
     assert params.get_list("student_ids[]") == ["self"]
     assert set(params.get_list("include[]")) == {
@@ -173,3 +221,77 @@ async def test_recent_sweep_filters_by_window_and_ignores_own_comments(config: C
         "rubric_assessment",
         "assignment",
     }
+
+
+@respx.mock
+async def test_recent_sweep_counts_releases_and_comment_edits(config: Config) -> None:
+    """Under manual posting a grade keeps its grading-time stamps when it is
+    released; only `posted_at` moves. A grade held past the window must still
+    land in the sweep when it finally appears."""
+    since = datetime(2026, 9, 15, tzinfo=UTC)
+    old = "2026-08-01T00:00:00Z"
+    recent = "2026-09-16T00:00:00Z"
+    respx.get(f"{API}/courses/99/students/submissions").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {  # graded and commented on long ago, released recently
+                    "graded_at": old,
+                    "posted_at": recent,
+                    "submission_comments": [comment(1, "Nice work", old)],
+                    "assignment": {"id": 1, "name": "Released"},
+                },
+                {  # an old instructor comment, edited recently
+                    "graded_at": old,
+                    "submission_comments": [{**comment(1, "Due Friday", old), "edited_at": recent}],
+                    "assignment": {"id": 2, "name": "Edited"},
+                },
+                {  # only the user's own comment was edited recently
+                    "graded_at": old,
+                    "submission_comments": [{**comment(ME, "Done", old), "edited_at": recent}],
+                    "assignment": {"id": 3, "name": "Own edit"},
+                },
+                {  # posted with the rest of the section, with nothing on it
+                    "workflow_state": "unsubmitted",
+                    "posted_at": recent,
+                    "assignment": {"id": 4, "name": "Posted, empty"},
+                },
+            ],
+        )
+    )
+
+    async with CanvasClient(config) as client:
+        items = await fetch_recent_feedback(client, 99, my_id=ME, since=since)
+
+    assert [a["name"] for a, _ in items] == ["Released", "Edited"]
+    assert [fb.last_change_at for _, fb in items] == [recent, recent]
+
+
+@respx.mock
+async def test_recent_sweep_drops_a_rubric_with_no_assessment_behind_it(config: Config) -> None:
+    """A hidden grade arrives without its rubric assessment. Every criterion
+    listed unmarked would read as an instructor who marked nothing."""
+    respx.get(f"{API}/courses/99/students/submissions").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "workflow_state": "graded",
+                    "graded_at": "2026-09-26T20:07:00Z",
+                    "posted_at": None,
+                    "assignment": {"id": 1, "name": "Lab 3", "rubric": RUBRIC},
+                },
+            ],
+        )
+    )
+
+    async with CanvasClient(config) as client:
+        items = await fetch_recent_feedback(
+            client, 99, my_id=ME, since=datetime(2026, 9, 15, tzinfo=UTC)
+        )
+
+    fb = items[0][1]
+    assert fb.rubric == []
+    assert fb.score is None
+    assert fb.posted_at is None
+    assert fb.workflow_state == "graded"

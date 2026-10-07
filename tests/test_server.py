@@ -585,6 +585,55 @@ async def test_list_feedback_sweeps_past_a_locked_course_and_hides_own_comments(
     assert [(c["comment"], c["mine"]) for c in own] == [("Mine", True), ("See me", False)]
 
 
+@respx.mock
+async def test_list_feedback_marks_provisional_scores_and_sorts_newest_first() -> None:
+    _mock_courses()
+    _mock_self()
+    now = datetime.now(UTC)
+
+    def ago(hours: int) -> str:
+        return (now - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    respx.get(f"{API}/courses/1/students/submissions").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "score": 9.0,
+                    "workflow_state": "graded",
+                    "graded_at": ago(48),
+                    "posted_at": ago(47),
+                    "assignment": {"id": 10, "name": "Lab 2"},
+                }
+            ],
+        )
+    )
+    respx.get(f"{API}/courses/2/students/submissions").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "score": 1.4,
+                    "workflow_state": "pending_review",
+                    "graded_at": ago(5),
+                    "posted_at": ago(5),
+                    "assignment": {"id": 20, "name": "Quiz 5", "points_possible": 10.0},
+                }
+            ],
+        )
+    )
+
+    async with Client(server.mcp) as c:
+        rows = (await c.call_tool("list_feedback", {})).data["feedback"]
+
+    assert [r["name"] for r in rows] == ["Quiz 5", "Lab 2"], "newest first, across courses"
+    assert rows[0]["workflow_state"] == "pending_review"
+    assert rows[0]["score"] == 1.4
+    assert rows[0]["last_change_at"] == ago(5)
+    assert "workflow_state" not in rows[1], "graded is the usual state, so it is left out"
+    assert rows[1]["last_change_at"] == ago(47), "the release, not the grading"
+
+
 # ---- file downloads ----------------------------------------------------------
 
 PNG_1PX = bytes.fromhex(

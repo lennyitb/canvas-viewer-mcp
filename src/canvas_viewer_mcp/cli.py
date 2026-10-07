@@ -109,7 +109,12 @@ async def _feedback(client: CanvasClient, course_id: int | None) -> int:
         for assignment, fb in items:
             score = "-" if fb.score is None else f"{fb.score:g}"
             posted = "posted" if fb.posted_at else "UNPOSTED"
-            print(f"  {assignment.get('id'):>8}  {score:>6}  {posted:<9} {assignment.get('name')}")
+            changed = (fb.last_change_at or "-")[:10]
+            state = "" if fb.workflow_state in (None, "graded") else f"  [{fb.workflow_state}]"
+            print(
+                f"  {assignment.get('id'):>8}  {changed:<10}  {score:>6}  {posted:<9} "
+                f"{assignment.get('name')}{state}"
+            )
             for c in fb.comments:
                 who = "me" if c.mine else (c.author_name or "?")
                 text = (c.comment or "(no text)").replace("\n", " ")[:90]

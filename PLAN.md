@@ -254,6 +254,55 @@ was blocked.
 - [ ] The same, through the deployed connector in claude.ai, including a fresh
       chat asked to "download the History syllabus"
 
+## Stage 11 — When a grade changed, and whether it is final
+
+Circuits released Quiz 5 at 1.4/10 on 10/4, pending review of its written
+answers, and regraded it to 10/10 on 10/6. `list_feedback` caught the regrade,
+but nothing on the row said the first score had been provisional or which
+change was the latest, so the dashboard dated it by `posted_at` and lost the
+pending state. The same course posts grades by hand and holds them for up to
+a day after grading. While a grade is held, Canvas strips the score, the
+rubric marks and the comments written before release. On release the only
+stamp that moves is `posted_at`, so a grade held longer than the window
+never showed up in the sweep at all.
+
+- [x] `last_change()`: the latest of `graded_at`, `posted_at`, and anyone
+      else's comment, written or edited. `posted_at` counts only when it
+      released something (a grade or someone else's comment), because posting
+      a whole section also stamps submissions with nothing on them
+- [x] `list_feedback` windows on it. This is a bug fix: a grade held past the
+      window and then released, or an edited comment, was skipped
+- [x] `last_change_at` on every feedback row, in UTC, and `list_feedback`
+      sorted newest first across courses
+- [x] `workflow_state` on feedback rows, left off when `graded`;
+      `pending_review` marks a provisional score
+- [x] `posted_at` on `list_assignments` submissions: `graded` with no
+      `posted_at` is a hidden grade
+- [x] A sweep row whose rubric has no assessment behind it leaves the rubric
+      out rather than listing every criterion unmarked. `get_assignment`
+      keeps the definition, because before grading it is the only place the
+      rubric shows
+- [x] Tool docstrings and connection instructions describe the hidden-grade
+      shape; README follows
+- [x] Checkpoint: live against the real account, in process. Quiz 5 is dated
+      by its 10/6 regrade and Lab 3 by its 9/27 release, not its 9/26
+      grading. `list_feedback(days=30)` returned the same 36 rows as before,
+      newest first across courses, in 23.8k characters against 22.3k: the
+      added length is `last_change_at`. Every rubric on the account had
+      marks, so none was dropped
+- [ ] The connection instructions were already past the 2,048 characters a
+      Claude client shows (it cuts them off mid-word in the Files paragraph),
+      and this adds about 60 more. The detail went into the `list_feedback`
+      description instead; the instructions still need cutting to fit
+- [ ] Live: a Circuits lab during its hidden gap reads `graded` with
+      `graded_at` set and no `posted_at`, score or rubric marks
+- [ ] Live: the next Circuits quiz with written questions reads
+      `pending_review` with its partial score and `posted_at` set
+
+The skills that consume these fields are a separate change: dating grades by
+last change, showing provisional and hidden grades under Waiting, and diffing
+a snapshot between runs.
+
 ## Running concern — response size
 Tool results consume model context and mobile latency. List tools return
 summaries plus IDs; detail is fetched on request. Bodies are converted to

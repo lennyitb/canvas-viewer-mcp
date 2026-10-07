@@ -99,10 +99,11 @@ and can also return the thread itself when the posts need reading.
 
 Instructor feedback -- comments, rubric marks, attached files -- is in the
 `feedback` field of `get_assignment`, and `list_feedback` sweeps what was
-graded or commented on recently. Comments sometimes carry work the grade does
-not show: a resubmission offer, a revision deadline, a request to meet. A
-`posted_at` of null means grades are not yet released and some feedback may
-still be hidden from the user.
+graded, released or commented on recently. Comments sometimes carry work the
+grade does not show: a resubmission offer, a revision deadline, a request to
+meet. A graded submission with no `posted_at` is a hidden grade, its score,
+rubric marks and pre-release comments withheld; `pending_review` marks a
+provisional score.
 
 Course files -- handouts, lab sheets, starter code, slides, syllabi -- are
 reachable by id even in courses that hide the Files tab. Ids come from
@@ -315,6 +316,9 @@ async def list_assignments(course_id: int | None = None) -> dict[str, Any]:
     covers the main post only and says nothing about required replies. Do not
     count those as done here; `list_discussion_participation` checks them all
     in one call.
+
+    A `submission` reading `graded` with no `posted_at` is a hidden grade:
+    entered, not yet released, so Canvas leaves out the score.
     """
     client = await get_client()
     courses = await _courses()
@@ -391,12 +395,21 @@ async def get_assignment(
 async def list_feedback(
     days: int = 14, course_id: int | None = None, include_own_comments: bool = False
 ) -> dict[str, Any]:
-    """Assignments graded, or commented on by someone else, in the last `days`.
+    """Assignments graded, released, or commented on by someone else (a comment
+    edit counts) in the last `days`, newest first.
 
     One request per course. Each row carries the grade, the comments, and the
     rubric marks; the user's own comments are left out unless
-    `include_own_comments` is set. Rows with `posted_at` absent are not yet
-    released, and may be missing feedback the instructor has written.
+    `include_own_comments` is set. `last_change_at` is the latest of those
+    events, in UTC, and is what the window and the order use: date a row by
+    it, not by `graded_at` or `posted_at`.
+
+    `workflow_state` appears only when it is not `graded`. `pending_review`
+    means the score is provisional, with part of it still to be graded.
+
+    Rows with `posted_at` absent are not yet released. A row with `graded_at`
+    but no `posted_at` is a grade entered but hidden: Canvas withholds the
+    score, the rubric marks and the comments written before release.
 
     Nothing here decides whether feedback needs acting on. Read the comments.
     """
@@ -429,12 +442,17 @@ async def list_feedback(
                 "points_possible": assignment.get("points_possible"),
                 **_dump(feedback, drop=("comments", "rubric")),
             }
+            # The usual state, so only the others are worth a key.
+            if row.get("workflow_state") == "graded":
+                del row["workflow_state"]
             if comments:
                 row["comments"] = [_dump(c, drop=comment_drop) for c in comments]
             if feedback.rubric:
                 row["rubric"] = [_dump(r) for r in feedback.rubric]
             results.append({k: v for k, v in row.items() if v is not None})
 
+    # Newest first across courses; the unavailable notes, with no stamp, last.
+    results.sort(key=lambda r: r.get("last_change_at") or "", reverse=True)
     return {
         "count": len(results),
         "since": since.strftime("%Y-%m-%d"),
